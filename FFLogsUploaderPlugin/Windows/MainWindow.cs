@@ -551,11 +551,27 @@ public class MainWindow : Window, IAsyncDisposable
         }
 
         liveLogTokenSource ??= new CancellationTokenSource();
-        liveLogTask = Task.Run(async () => await uploader.StartLiveLogAsync(logFolder, region, visibility, guildId == -1 ? null : guildId,
-                                                  reportDescription,
-                                                  includeEntireFileInReport, liveLogProgress,
-                                                  reportCode => { liveLogReportCode = reportCode; },
-                                                  liveLogTokenSource.Token));
+        liveLogTask = Task.Run(async () =>
+        {
+            try
+            {
+                await uploader.StartLiveLogAsync(logFolder, region, visibility, guildId == -1 ? null : guildId,
+                                                 reportDescription,
+                                                 includeEntireFileInReport, liveLogProgress,
+                                                 reportCode => { liveLogReportCode = reportCode; },
+                                                 liveLogTokenSource.Token);
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.Error(e, "Live logging operation failed");
+                liveLogProgressMessage = string.Empty;
+                liveLogErrorMessage = e.Message;
+            }
+            finally
+            {
+                isWorking = false;
+            }
+        });
     }
 
     private async Task DoUploadLogFileAsync()
