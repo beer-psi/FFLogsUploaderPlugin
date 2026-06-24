@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+  <PropertyGroup>
+    <Version>0.0.0.1</Version>
+    <PackageProjectUrl>https://github.com/beer-psi/FFLogsUploaderPlugin</PackageProjectUrl>
+    <PackageLicenseExpression>0BSD</PackageLicenseExpression>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>FFLogsUploaderPlugin</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="..\Data\url-search-params.js">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Visible>false</Visible>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="HtmlAgilityPack" Version="1.12.4" />
+    <PackageReference Include="Microsoft.ClearScript.V8" Version="7.5.1" />
+    <PackageReference Include="Microsoft.ClearScript.V8.Native.win-x64" Version="7.5.1" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,10 @@
+{
+  "Author": "beerpsi",
+  "Name": "FF Logs Uploader",
+  "Punchline": "An unofficial in-game log uploader client for FF Logs",
+  "Description": "An alternative to the Archon App for uploading logs to the FF Logs service. Basic features are covered: uploading a log, splitting a log file, live logging.",
+  "RepoUrl": "https://github.com/beer-psi/FFLogsUploaderPlugin",
+  "ApplicableVersion": "any",
+  "Tags": ["logs", "fflogs", "uploader"],
+  "CategoryTags": ["Utility", "Other"]
+}
