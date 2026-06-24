@@ -7,6 +7,8 @@ using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Dalamud.Utility;
+using Serilog.Events;
 
 namespace FFLogsUploaderPlugin.FFLogs;
 
@@ -68,12 +70,16 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
                                                      segmentId, region,
                                                      [], true, false, false);
                 latestLogFilePosition = chunk.EndPosition;
-                progress?.Report($"{catchupAction} latest log file {Path.GetFileName(latestLogFile)} ({Math.Min(100, chunk.EndPosition * 100 / latestLogFile.Length)}%, {chunk.EndPosition}/{latestLogFile.Length})");
+                progress?.Report($"{catchupAction} latest log file {Path.GetFileName(latestLogFile)} ({Math.Min(100, chunk.EndPosition * 100 / latestLogFileInfo.Length)}%, {chunk.EndPosition}/{latestLogFileInfo.Length})");
 
                 if (token.IsCancellationRequested)
                     break;
             }
         }
+        
+        latestLogFileInfo = latestLogFile != null ? new FileInfo(latestLogFile) : null;
+        Plugin.Log.Debug("Catch-up completed: LatestLogFile={0} CurrentPosition={1} Length={2}", latestLogFile ?? "None",
+                         latestLogFilePosition, latestLogFileInfo?.Length ?? 0L);
 
         if (token.IsCancellationRequested)
         {
@@ -81,11 +87,13 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
             return;
         }
 
+        Plugin.Log.Debug("Staring main live log watch loop");
+
         progress?.Report(latestLogFile != null
                              ? $"Watching for new logs from {Path.GetFileName(latestLogFile)}."
                              : "Waiting for a log file. Log files last written more than 6 hours ago are not considered for live logging.");
 
-        while (!token.IsCancellationRequested)
+        while (true)
         {
             var newLatestLogFile = FindLatestLogFileInFolder(logFolder);
             
@@ -115,6 +123,8 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
             // one), then switch to reading that file
             if (newLatestLogFile != latestLogFile)
             {
+                Plugin.Log.Debug($"[LiveLog] Log file changed: {latestLogFile} -> {newLatestLogFile}");
+                
                 latestLogFile = newLatestLogFile;
                 latestLogFilePosition = 0L;
                 
@@ -124,15 +134,32 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
             // Update log file info all the time so we get proper file sizes.
             latestLogFileInfo = new FileInfo(latestLogFile);
 
-            // Push fights if the log file has not changed for 120 minutes, or if cancellation is requested.
-            var pushFightIfNeeded = token.IsCancellationRequested ||
-                                    DateTime.UtcNow.Subtract(File.GetLastWriteTimeUtc(latestLogFile)).TotalSeconds > 120;
+            // Push fights if the log file has not changed for 120 seconds, or if cancellation is requested.
+            var isIdleLogFile = DateTime.UtcNow.Subtract(File.GetLastWriteTimeUtc(latestLogFile)).TotalSeconds > 120;
+            var pushFightIfNeeded = token.IsCancellationRequested || isIdleLogFile;
 
+            if (pushFightIfNeeded)
+            {
+                Plugin.Log.Debug("[LiveLog] PushFightIfNeeded={0} (CancellationRequested={1}, IdleLogFile={2})",
+                                   pushFightIfNeeded, token.IsCancellationRequested, isIdleLogFile);
+            }
+            
             // Upload logs from the latest log file, starting from the log position
             // ReSharper disable once UseCancellationTokenForIAsyncEnumerable
             await foreach (var chunk in ReadFileByChunkedLinesAsync(latestLogFile,
                                                                     startingPosition: latestLogFilePosition))
             {
+                if (Plugin.Log.MinimumLogLevel <= LogEventLevel.Verbose)
+                {
+                    var joinedLines = string.Join("\n", chunk.Lines);
+                    joinedLines = joinedLines[..Math.Min(500, joinedLines.Length)];
+
+                    if (!joinedLines.IsNullOrWhitespace())
+                    {
+                        Plugin.Log.Verbose(joinedLines[..Math.Min(500, joinedLines.Length)]);    
+                    }
+                }
+                
                 segmentId = await UploadLogPartAsync(report.Code, chunk.Lines, chunk.EndPosition, chunk.IsEof,
                                                      segmentId,
                                                      region, [], true, false,
@@ -144,6 +171,9 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
                 if (token.IsCancellationRequested)
                     break;
             }
+            
+            if (token.IsCancellationRequested)
+                break;
         }
 
         await desktopClient.TerminateReport(report.Code);
