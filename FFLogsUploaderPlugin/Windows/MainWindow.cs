@@ -30,6 +30,8 @@ public class MainWindow : Window, IAsyncDisposable
     private bool isWorking;
     private CancellationTokenSource? liveLogTokenSource;
     private Task? liveLogTask;
+
+    internal string ParserStartErrorMessage = string.Empty;
     
     private int selectedGuildIndex;
     private int selectedRegionIndex;
@@ -118,6 +120,12 @@ public class MainWindow : Window, IAsyncDisposable
             return;
         }
 
+        if (!ParserStartErrorMessage.IsNullOrWhitespace())
+        {
+            ImGui.TextColored(new Vector4(1, 0.3f, 0.3f, 1), $"Parser failed to load, please check Dalamud logs (/xllog): {ParserStartErrorMessage}");
+            return;
+        } 
+        
         if (!plugin.FfLogParser.Started)
         {
             ImGui.Text("Loading parser...");
@@ -500,6 +508,7 @@ public class MainWindow : Window, IAsyncDisposable
             catch (Exception e)
             {
                 Plugin.Log.Error(e, "Loading parser failed");
+                ParserStartErrorMessage = e.Message;
             }
         }
     }

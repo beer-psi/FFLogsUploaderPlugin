@@ -135,6 +135,7 @@ public sealed class Plugin : IAsyncDalamudPlugin
             catch (Exception e)
             {
                 Log.Error(e, "Loading parser failed");
+                MainWindow.ParserStartErrorMessage = e.Message;
             }
         }
     }
