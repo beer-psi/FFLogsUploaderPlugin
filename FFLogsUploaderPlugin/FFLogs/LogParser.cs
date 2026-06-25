@@ -19,7 +19,7 @@ public class LogParser(int id = 1) : IDisposable
 {
     // ensure that everything runs in a single thread since V8 is single-threaded
     private readonly ConcurrentExclusiveSchedulerPair scheduler = new();
-    private readonly V8ScriptEngine engine = new();
+    private V8ScriptEngine engine = new();
     private ScriptObject? parserReceiveMessage;
     private readonly JsonSerializerSettings jsonSerializerSettings = new()
     {
@@ -32,6 +32,15 @@ public class LogParser(int id = 1) : IDisposable
 
     public async Task StartAsync(bool gameContentDetectionEnabled, bool metersEnabled, bool liveFightDataEnabled, string parserCode)
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        
+        if (Started)
+        {
+            parserReceiveMessage = null;
+            engine.Dispose();
+            engine = new V8ScriptEngine();
+        }
+        
         await Task.Factory.StartNew(() =>
         {
             engine.Execute($$"""
@@ -89,6 +98,8 @@ public class LogParser(int id = 1) : IDisposable
 
     private async Task<T> CallParserAsync<T>(ParserRequest request, string completedMessageType)
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        
         if (parserReceiveMessage == null)
         {
             throw new InvalidOperationException("Parser has not been started");
