@@ -176,7 +176,8 @@ public class LogParser(int id = 1) : IDisposable
     /// <param name="lines">List of lines to parse. Each line must have its trailing newline removed.</param>
     /// <param name="selectedRegion">
     /// ID of the region this log is from. The region IDs are obtained server side from the desktop client's login
-    /// response, so it is not an enum. Currently: NA = 1, EU = 2, JP = 3, OC = 6 (I assume CN/TW/KR are in between).
+    /// response (<see cref="DesktopClient.LoginResponse"/>), so it is not an enum. Currently: NA = 1, EU = 2, JP = 3,
+    /// OC = 6 (I assume CN/TW/KR are in between).
     /// </param>
     /// <param name="raidsToUpload">
     /// List of raids to upload, retrieved from <see cref="CollectScannedRaidsAsync"/>. This must be ordered by
