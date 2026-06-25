@@ -323,10 +323,25 @@ public class DesktopClient : IDisposable
         public required long? RegionId { get; set; } = null;
     }
 
+    public class EnabledFeatures
+    {
+        public bool NoAds { get; set; }
+        public bool RealTimeLiveLogging { get; set; }
+        public bool Meters { get; set; }
+        public bool LiveFightData { get; set; }
+        public bool TooltipAddon { get; set; }
+        public bool TooltipAddonTierTwoData { get; set; }
+        public bool AutoLog { get; set; }
+        public bool MetersLiveParse { get; set; }
+        public bool MetersRaceTheGhost { get; set; }
+        public bool Video { get; set; }
+        public bool CloudVideo { get; set; }
+    }
+
     public class LoginResponse
     {
         public required User User { get; set; }
-        public required Dictionary<string, bool> EnabledFeatures { get; set; }
+        public required EnabledFeatures EnabledFeatures { get; set; }
         public required List<GuildSelectItem> GuildSelectItems { get; set; }
         public required List<SelectItem> ReportVisibilitySelectItems { get; set; }
         public required List<SelectItem>? ReportTagSelectItems { get; set; } = null;
