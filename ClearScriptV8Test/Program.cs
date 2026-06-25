@@ -1,6 +1,7 @@
 ﻿// See https://aka.ms/new-console-template for more information
 
-using System.Diagnostics.CodeAnalysis;
+using System.Buffers;
+using System.Diagnostics;
 using System.Reflection;
 using System.Text;
 using Microsoft.ClearScript;
@@ -13,416 +14,194 @@ using Newtonsoft.Json.Serialization;
 //                            .OrderByDescending(File.GetLastWriteTimeUtc)
 //                            .FirstOrDefault());
 
-using var parser = new LogParser();
-
-await parser.StartAsync(false, false, false, string.Empty);
-await parser.ClearAsync();
-await parser.SetReportCodeAsync("test");
-// await parser.SetLiveLoggingStartTimeAsync(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-
-using var sr = new StreamReader("/home/beerpsi/Documents/IINACT/Network_30202_20260620.log", Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-var logLines = new List<string>(5000);
-var logFilePosition = 0L;
-
-while (true)
+await foreach (var chunk in ReadFileByChunkedLinesAsync("/home/beerpsi/Documents/IINACT/Network_30203_20260624.log"))
 {
-    var line = await sr.ReadLineAsync();
-
-    if (line != null)
+    foreach (var line in chunk.Lines)
     {
-        logLines.Add(line);
-    }
-
-    if (logLines.Count >= 5000 || line == null)
-    {
-        await parser.ParseLinesAsync(logLines, 3, [], true, logFilePosition);
-        
-        logLines.Clear();
-        logFilePosition = GetStreamPosition(sr);
-    }
-
-    if (line == null)
-    {
-        break;
+        Console.WriteLine(line);
     }
 }
 
-var collectScannedRaids = await parser.CollectScannedRaidsAsync();
-Console.WriteLine(collectScannedRaids.Count);
-
-var collectFights = await parser.CollectFightsAsync(true, true);
-Console.WriteLine(collectFights.Fights.Count);
 return;
 
+async IAsyncEnumerable<(long, string)> ReadFileLinesAsync(string filePath, long startingPosition = 0L)
+    {
+        // Have to create a raw filestream for seeking first since StreamReader is horrendously unusable for seeking
+        // and determining stream position
+        await using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
 
-static long GetStreamPosition(StreamReader sr)
-{
-    var charPosField = typeof(StreamReader).GetField("_charPos", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)!;
-    var charLenField = typeof(StreamReader).GetField("_charLen", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)!;
-    var charBufferField = typeof(StreamReader).GetField("_charBuffer", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)!;
-    
-    var charBuffer = (char[])charBufferField.GetValue(sr)!;
-    var charLen = (int)charLenField.GetValue(sr)!;
-    var charPos = (int)charPosField.GetValue(sr)!;
+        if (fs.CanSeek && startingPosition != 0L)
+            fs.Seek(startingPosition, SeekOrigin.Begin);
         
-    return sr.BaseStream.Position - sr.CurrentEncoding.GetByteCount(charBuffer, charPos, charLen - charPos);
+        using var sr = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var buffer = ArrayPool<char>.Shared.Rent(4096);
+        var lineBuilder = new StringBuilder();
+        int charsRead;
+
+        while ((charsRead = await sr.ReadAsync(buffer, 0, buffer.Length)) > 0)
+        {
+            for (var i = 0; i < charsRead; i++)
+            {
+                lineBuilder.Append(buffer[i]);
+
+                if (buffer[i] == '\n')
+                {
+                    var endPosition = sr.GetPosition()
+                                 - sr.CurrentEncoding.GetByteCount(buffer, 0, charsRead)
+                                 + sr.CurrentEncoding.GetByteCount(buffer, 0, i + 1);
+                    var line = lineBuilder.ToString();
+                    lineBuilder.Clear();
+
+                    yield return (endPosition, line);
+                }
+            }
+        }
+
+        yield return (-1L, string.Empty);
+    }
+
+    // Enumerates through chunks of maxLinesPerChunk of the given file at a time.
+    async IAsyncEnumerable<FileChunk> ReadFileByChunkedLinesAsync(
+        string filePath, int maxLinesPerChunk = 5000, long startingPosition = 0L)
+    {
+        var lines = new List<string>(maxLinesPerChunk);
+        var lastEndPosition = -1L;
+        
+        await foreach (var (endPosition, line) in ReadFileLinesAsync(filePath, startingPosition))
+        {
+            var isEof = endPosition == -1L;
+
+            if (!isEof)
+            {
+                lines.Add(line);
+                lastEndPosition = endPosition;
+            }
+
+            if (lines.Count >= maxLinesPerChunk || isEof)
+            {
+                yield return new FileChunk
+                {
+                    EndPosition = lastEndPosition,
+                    IsEof = isEof,
+                    Lines = lines,
+                };
+
+                if (!isEof)
+                    lines = new List<string>(maxLinesPerChunk);
+            }
+        }
+    }
+
+class FileChunk
+{
+    public required long EndPosition;
+    public required bool IsEof;
+    public required List<string> Lines;
 }
 
-public class LogParser(int id = 1) : IDisposable
+public static class StreamReaderExtensions
 {
-    // ensure that everything runs in a single thread since V8 is single-threaded
-    private readonly ConcurrentExclusiveSchedulerPair scheduler = new();
-    private readonly V8ScriptEngine engine = new();
-    private ScriptObject? parserReceiveMessage;
-    private readonly JsonSerializerSettings jsonSerializerSettings = new()
-    {
-        ContractResolver = new CamelCasePropertyNamesContractResolver()
-    };
-    private bool disposed;
+    private static readonly FieldInfo CharPosField =
+        typeof(StreamReader).GetField(
+            "_charPos", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)!;
 
-    public int Id => id;
-    public bool Started => parserReceiveMessage != null;
+    private static readonly FieldInfo CharLenField =
+        typeof(StreamReader).GetField(
+            "_charLen", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)!;
 
-    public async Task StartAsync(bool gameContentDetectionEnabled, bool metersEnabled, bool liveFightDataEnabled, string parserCode)
+    private static readonly FieldInfo CharBufferField =
+        typeof(StreamReader).GetField("_charBuffer",
+                                      BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)!;
+
+    private static readonly MethodInfo ReadBufferAsyncMethod =
+        typeof(StreamReader).GetMethod("ReadBufferAsync",
+                                       BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)!;
+
+    public static long GetPosition(this StreamReader sr)
     {
-        await Task.Factory.StartNew(() =>
-        {
-            engine.Execute($$"""
-                           globalThis.window = globalThis;
-                           window.receiveMessageFns = [];
-                           window.addEventListener = (type, listener, options) => {
-                               if (type == "message") {
-                                   receiveMessageFns.push(listener);
-                               }
-                           };
-                           window.location = {
-                               search: '?id=1'
-                                   + '&ts={{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}'
-                                   + '&gameContentDetectionEnabled={{gameContentDetectionEnabled.ToString().ToLower()}}'
-                                   + '&metersEnabled={{metersEnabled.ToString().ToLower()}}'
-                                   + '&liveFightDataEnabled={{liveFightDataEnabled.ToString().ToLower()}}' 
-                           };
-                           """);
-            engine.Execute(File.ReadAllText("/home/beerpsi/projects/fflogs-uploader-cli/url-search-params.js"));
-            engine.Execute(File.ReadAllText("/home/beerpsi/projects/fflogs-uploader-cli/test.js"));
-            engine.Execute("""
-                           window.sendToHost = (msg, id, event, obj = null) => {
-                                event.source.postMessage({ message: msg, id, data: obj }, event.origin);
-                           };
-                           window.__parserReceiveMessage = (data, callback) => {
-                               const source = {
-                                   postMessage(message, origin) {
-                                       callback(JSON.stringify(
-                                           message,
-                                           (key, value) => {
-                                               if (value instanceof Error) {
-                                                   const error = {};
-                                                   
-                                                   Object.getOwnPropertyNames(value).forEach((name) => {
-                                                       error[name] = value[name];
-                                                   });
-                                                   
-                                                   return error;
-                                               }
-                                               
-                                               return value;
-                                           },
-                                       ));
-                                   },
-                               };
-                               
-                               for (const fn of receiveMessageFns) {
-                                   fn({ source, origin: 'http://localhost:8080', data: JSON.parse(data) });
-                               }
-                           };
-                           """);
-            parserReceiveMessage = engine.Script.__parserReceiveMessage;
-        }, CancellationToken.None, TaskCreationOptions.DenyChildAttach, scheduler.ExclusiveScheduler);
+        var charBuffer = (char[])CharBufferField.GetValue(sr)!;
+        var charLen = (int)CharLenField.GetValue(sr)!;
+        var charPos = (int)CharPosField.GetValue(sr)!;
+        
+        return sr.BaseStream.Position - sr.CurrentEncoding.GetByteCount(charBuffer, charPos, charLen - charPos);
     }
 
-    private async Task<T> CallParserAsync<T>(ParserRequest request, string completedMessageType)
+    public static async Task<string?> ReadLineIgnoreEofAsync(this StreamReader sr, CancellationToken token = default)
     {
-        if (parserReceiveMessage == null)
+        var charPos = (int)CharPosField.GetValue(sr)!;
+        var charLen = (int)CharLenField.GetValue(sr)!;
+        
+        if (charPos == charLen && (await ((ValueTask<int>)ReadBufferAsyncMethod.Invoke(sr, [token])!).ConfigureAwait(false)) == 0)
         {
-            throw new InvalidOperationException("Parser has not been started");
+            return null;
         }
 
-        var tcs = new TaskCompletionSource<T>();
-        var serializedMessage = JsonConvert.SerializeObject(request, jsonSerializerSettings);
+        string retVal;
+        char[]? arrayPoolBuffer = null;
+        int arrayPoolBufferPos = 0;
 
-        string loggedSerializedMessage;
-        if (request is ParseLinesRequest plRequest)
+        do
         {
-            loggedSerializedMessage = JsonConvert.SerializeObject(
-                new ParseLinesRequest { Id = plRequest.Id, Message = "parse-lines", Lines = [], SelectedRegion = plRequest.SelectedRegion,
-                    RaidsToUpload = plRequest.RaidsToUpload, Scanning = plRequest.Scanning, LogFilePosition = plRequest.LogFilePosition },
-                jsonSerializerSettings);
+            char[] charBuffer = (char[])CharBufferField.GetValue(sr)!;
+            charLen = (int)CharPosField.GetValue(sr)!;
+            charPos = (int)CharPosField.GetValue(sr)!;
+
+            // Look for '\r' or \'n'.
+            Debug.Assert(charPos < charLen, "ReadBuffer returned > 0 but didn't bump _charLen?");
+
+            int idxOfNewline = charBuffer.AsSpan(charPos, charLen - charPos).IndexOfAny('\r', '\n');
+            if (idxOfNewline >= 0)
+            {
+                if (arrayPoolBuffer is null)
+                {
+                    retVal = new string(charBuffer, charPos, idxOfNewline);
+                }
+                else
+                {
+                    retVal = string.Concat(arrayPoolBuffer.AsSpan(0, arrayPoolBufferPos), charBuffer.AsSpan(charPos, idxOfNewline));
+                    ArrayPool<char>.Shared.Return(arrayPoolBuffer);
+                }
+
+                charPos += idxOfNewline;
+                char matchedChar = charBuffer[charPos++];
+                CharPosField.SetValue(sr, charPos);
+
+                // If we found '\r', consume any immediately following '\n'.
+                if (matchedChar == '\r')
+                {
+                    if (charPos < charLen || (await ((ValueTask<int>)ReadBufferAsyncMethod.Invoke(sr, [token])!).ConfigureAwait(false)) > 0)
+                    {
+                        if (((char[])CharBufferField.GetValue(sr)!)[(int)CharPosField.GetValue(sr)!] == '\n')
+                        {
+                            CharPosField.SetValue(sr, (int)CharPosField.GetValue(sr)! + 1);
+                        }
+                    }
+                }
+
+                return retVal;
+            }
+
+            // We didn't find '\r' or '\n'. Add the read data to the pooled buffer
+            // and loop until we reach a newline or EOF.
+            if (arrayPoolBuffer is null)
+            {
+                arrayPoolBuffer = ArrayPool<char>.Shared.Rent(charLen - charPos + 80);
+            }
+            else if ((arrayPoolBuffer.Length - arrayPoolBufferPos) < (charLen - charPos))
+            {
+                char[] newBuffer = ArrayPool<char>.Shared.Rent(checked(arrayPoolBufferPos + charLen - charPos));
+                arrayPoolBuffer.AsSpan(0, arrayPoolBufferPos).CopyTo(newBuffer);
+                ArrayPool<char>.Shared.Return(arrayPoolBuffer);
+                arrayPoolBuffer = newBuffer;
+            }
+            charBuffer.AsSpan(charPos, charLen - charPos).CopyTo(arrayPoolBuffer.AsSpan(arrayPoolBufferPos));
+            arrayPoolBufferPos += charLen - charPos;
         }
-        else
-        {
-            loggedSerializedMessage = JsonConvert.SerializeObject(request, jsonSerializerSettings);
-        }
-        
-        //Plugin.Log.Debug("[LogParser] --> {0}", loggedSerializedMessage);
+        while ((await ((ValueTask<int>)ReadBufferAsyncMethod.Invoke(sr, [token])!).ConfigureAwait(false)) > 0);
 
-        await Task.Factory.StartNew(() => parserReceiveMessage.Invoke(
-                           false,
-                           serializedMessage,
-                           (string callbackMessage) =>
-                           {
-                               //Console.WriteLine(callbackMessage);
-                               //Plugin.Log.Debug("[LogParser] <-- {0}", callbackMessage);
-                               
-                               var response =
-                                   JsonConvert.DeserializeObject<ParserResponse>(
-                                       callbackMessage, jsonSerializerSettings);
+        ArrayPool<char>.Shared.Return(arrayPoolBuffer);
 
-                               if (response == null)
-                               {
-                                   return;
-                               }
-
-                               if (response.Message == completedMessageType)
-                               {
-                                   tcs.TrySetResult(response.Data.ToObject<T>()!);
-                               }
-                               else switch (response.Message)
-                               {
-                                   case "set-error-text":
-                                       tcs.TrySetException(new ParserException(response.Data.ToObject<string>()));
-                                       break;
-                                   case "set-warning-text":
-                                       //Plugin.Log.Warning("[LogParser] {0}", response.Data.ToObject<string>()!);
-                                       break;
-                                   case "event":
-                                       //Plugin.Log.Information("[LogParser] [Event] {0}", callbackMessage);
-                                       break;
-                                   case "log-message":
-                                       var logMessage = response.Data.ToObject<List<string>>();
-                                       if (logMessage != null)
-                                       {
-                                           //Plugin.Log.Information("[LogParser] {0}", string.Join(" ", logMessage));
-                                       }
-                                       break;
-                                   default:
-                                       //Plugin.Log.Warning("[LogParser] [Unknown] {0}", callbackMessage);
-                                       break;
-                               }
-                           }), CancellationToken.None, TaskCreationOptions.DenyChildAttach, scheduler.ExclusiveScheduler);
-
-        return await tcs.Task;
-    }
-
-    public async Task<long> GetParserVersionAsync()
-    {
-        return await CallParserAsync<long>(new ParserRequest { Id = id, Message = "get-parser-version" },
-                                     "get-parser-version-completed");
-    }
-
-    public async Task SetReportCodeAsync(string reportCode)
-    {
-        await CallParserAsync<object?>(
-            new SetReportCodeRequest { Id = id, Message = "set-report-code", ReportCode = reportCode },
-            "set-report-code-completed");
-    }
-
-    public async Task SetStartDateAsync(long startDate)
-    {
-        await CallParserAsync<object?>(
-            new SetStartDateRequest { Id = id, Message = "set-start-date", StartDate = startDate },
-            "set-start-date-completed");
-    }
-
-    public async Task SetLiveLoggingStartTimeAsync(long startTime)
-    {
-        await CallParserAsync<object?>(
-            new SetLiveLoggingStartTimeRequest
-                { Id = id, Message = "set-live-logging-start-time", StartTime = startTime },
-            "set-live-logging-start-time-completed");
-    }
-
-    public async Task<ParseLinesResponseData> ParseLinesAsync(
-        List<string> lines, long selectedRegion, List<ScannedRaid> raidsToUpload, bool scanning, long logFilePosition)
-    {
-        return await CallParserAsync<ParseLinesResponseData>(
-                   new ParseLinesRequest
-                   {
-                       Id = id, Message = "parse-lines", Lines = lines, SelectedRegion = selectedRegion,
-                       RaidsToUpload = raidsToUpload, Scanning = scanning, LogFilePosition = logFilePosition
-                   },
-                   "parse-lines-completed");
-    }
-
-    public async Task ClearFightsAsync()
-    {
-        await CallParserAsync<object?>(new ParserRequest { Id = id, Message = "clear-fights" }, "clear-fights-completed");
-    }
-
-    public async Task ClearStateAsync()
-    {
-        await CallParserAsync<object?>(new ParserRequest { Id = id, Message = "clear-state" }, "clear-state-completed");
-    }
-
-    public async Task ClearMetersAsync()
-    {
-        await CallParserAsync<object?>(new ParserRequest { Id = id, Message = "clear-meters" }, "clear-meters-completed");
-    }
-
-    public async Task ClearAsync()
-    {
-        await ClearFightsAsync();
-        await ClearStateAsync();
-    }
-
-    public async Task<List<ScannedRaid>> CollectScannedRaidsAsync()
-    {
-        return await CallParserAsync<List<ScannedRaid>>(new ParserRequest { Id = id, Message = "collect-scanned-raids" },
-                                                   "collect-scanned-raids-completed");
-    }
-
-    public async Task<CollectFightsResponseData> CollectFightsAsync(bool pushFightIfNeeded, bool scanningOnly)
-    {
-        return await CallParserAsync<CollectFightsResponseData>(
-                   new CollectFightsRequest
-                   {
-                       Id = id, Message = "collect-fights", PushFightIfNeeded = pushFightIfNeeded,
-                       ScanningOnly = scanningOnly
-                   }, "collect-fights-completed");
-    }
-    
-    public async Task<CollectFightsResponseData> CollectInProgressFightAsync()
-    {
-        return await CallParserAsync<CollectFightsResponseData>(
-                   new ParserRequest { Id = id, Message = "collect-in-progress-fight" },
-                   "collect-in-progress-fight-completed");
-    }
-
-    public async Task<CollectMasterInfoResponseData> CollectMasterInfoAsync(string reportCode)
-    {
-        return await CallParserAsync<CollectMasterInfoResponseData>(
-                   new SetReportCodeRequest { Id = id, Message = "collect-master-info", ReportCode = reportCode },
-                   "collect-master-info-completed");
-    }
-
-    public async Task CallWipeAsync()
-    {
-        await CallParserAsync<object?>(new ParserRequest { Id = id, Message = "call-wipe" }, "call-wipe-completed");
-    }
-    
-    // collect-game-content
-    // collect-meters
-    // collect-live-fight-data
-    // clear-meters
-    // check-dungeon-inactivity
-    // force-end-game-content
-    
-    public void Dispose()
-    {
-        if (disposed) return;
-        
-        engine.Dispose();
-        parserReceiveMessage = null;
-        
-        disposed = true;
-        GC.SuppressFinalize(this);
-    }
-
-    internal class ParserException : Exception
-    {
-        internal ParserException(string? message) : base(message) { }
-    }
-    
-    internal class ParserRequest
-    {
-        public required int Id { get; set; }
-        public required string Message { get; set; }
-    }
-    
-    internal class SetReportCodeRequest : ParserRequest
-    {
-        public required string ReportCode { get; set; }
-    }
-    
-    internal class SetStartDateRequest : ParserRequest
-    {
-        public required long StartDate { get; set; }
-    }
-    
-    internal class SetLiveLoggingStartTimeRequest : ParserRequest
-    {
-        public required long StartTime { get; set; }
-    }
-    
-    internal class ParseLinesRequest : ParserRequest
-    {
-        public required List<string> Lines { get; set; }
-        public required long SelectedRegion { get; set; }
-        public required List<ScannedRaid> RaidsToUpload { get; set; }
-        public required bool Scanning { get; set; }
-        public required long LogFilePosition { get; set; }
-    }
-    
-    internal class CollectFightsRequest : ParserRequest
-    {
-        public required bool PushFightIfNeeded { get; set; }
-        public required bool ScanningOnly { get; set; }
-    }
-    
-    internal class ParserResponse
-    {
-        public required string Message { get; set; }
-        public required JToken Data { get; set; }
-    }
-
-    public class ParseLinesResponseData
-    {
-        public required bool Success { get; set; }
-        public long? ParsedLineCount { get; set; }
-        public string? Line { get; set; }
-        public JToken? Exception { get; set; }
-    }
-
-    public class ScannedRaid
-    {
-        public required bool Success { get; set; }
-        public required string Name { get; set; }
-        public required List<string> Friendlies { get; set; }
-        public required List<string> Enemies { get; set; }
-        public required long Start { get; set; }
-        public required long End { get; set; }
-        public required long Boss { get; set; }
-        public required long Difficulty { get; set; }
-        public required long Pulls { get; set; }
-        public required long ZoneStart { get; set; }
-    }
-
-    public class Fight
-    {
-        public required long EventCount { get; set; }
-        public required string EventsString { get; set; }
-    }
-
-    public class CollectFightsResponseData
-    {
-        public required long LogVersion { get; set; }
-        public required long GameVersion { get; set; }
-        public required string LogFileDetails { get; set; }
-        public required long Mythic { get; set; }
-        public required long StartTime { get; set; }
-        public required long EndTime { get; set; }
-        public required List<Fight> Fights { get; set; }
-    }
-
-    public class CollectMasterInfoResponseData
-    {
-        public required bool Success { get; set; }
-        public required long LastAssignedActorId { get; set; }
-        public required string ActorsString { get; set; }
-        public required long LastAssignedAbilityId { get; set; }
-        public required string AbilitiesString { get; set; }
-        public required long LastAssignedTupleId { get; set; }
-        public required string TuplesString { get; set; }
-        public required long LastAssignedPetId { get; set; }
-        public required string PetsString { get; set; }
+        return null;
     }
 }
+

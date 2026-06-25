@@ -13,6 +13,7 @@ using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Dalamud.Utility;
 using FFLogsUploaderPlugin.FFLogs;
+using FFLogsUploaderPlugin.Ipc;
 
 namespace FFLogsUploaderPlugin.Windows;
 
@@ -20,6 +21,7 @@ public class MainWindow : Window, IAsyncDisposable
 {
     private readonly Plugin plugin;
     private readonly FileDialogManager fileDialogManager = new();
+    private readonly IINACTIpc iinact;
 
     private string email;
     private string password;
@@ -68,6 +70,7 @@ public class MainWindow : Window, IAsyncDisposable
         };
         
         this.plugin = plugin;
+        iinact = new IINACTIpc(Plugin.PluginInterface);
 
         email = this.plugin.Configuration.FfLogsEmail;
         password = this.plugin.Configuration.FfLogsPassword;
@@ -796,6 +799,12 @@ public class MainWindow : Window, IAsyncDisposable
             {
                 return logFileOrFolder;
             }
+        }
+
+        if (iinact.IsActive() && iinact.GetLogFilePath() is { } iinactLogDirectory)
+        {
+            Plugin.Log.Debug("IINACT is active, opening file browser to IINACT log directory {0}", iinactLogDirectory);
+            return iinactLogDirectory;
         }
         
         // General default locations for log files:
