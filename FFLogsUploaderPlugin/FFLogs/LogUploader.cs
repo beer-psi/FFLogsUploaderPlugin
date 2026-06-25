@@ -3,11 +3,11 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
-using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Utility;
+using Newtonsoft.Json;
 using Serilog.Events;
 
 namespace FFLogsUploaderPlugin.FFLogs;
@@ -15,6 +15,8 @@ namespace FFLogsUploaderPlugin.FFLogs;
 public class LogUploader(DesktopClient desktopClient, LogParser logParser)
 {
     public class LogUploaderException(string message) : Exception(message);
+    
+    public int FightsUploaded { get; private set; }
 
     public async Task StartLiveLogAsync(
         string logFolder,
@@ -63,7 +65,7 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
             // We intentionally don't use a cancellation token here because we check for cancellation every time
             // after a chunk is uploaded.
             // ReSharper disable once UseCancellationTokenForIAsyncEnumerable
-            await foreach (var chunk in ReadFileByChunkedLinesAsync(latestLogFile))
+            await foreach (var chunk in LogReader.ReadFileChunkedLinesAsync(latestLogFile))
             {
                 // SetLiveLoggingStartTimeAsync above will stop previous logs from being uploaded.
                 segmentId = await UploadLogPartAsync(report.Code, chunk.Lines, chunk.EndPosition, chunk.IsEof,
@@ -146,7 +148,7 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
             
             // Upload logs from the latest log file, starting from the log position
             // ReSharper disable once UseCancellationTokenForIAsyncEnumerable
-            await foreach (var chunk in ReadFileByChunkedLinesAsync(latestLogFile,
+            await foreach (var chunk in LogReader.ReadFileChunkedLinesAsync(latestLogFile,
                                                                     startingPosition: latestLogFilePosition))
             {
                 if (Plugin.Log.MinimumLogLevel <= LogEventLevel.Verbose)
@@ -166,7 +168,7 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
                                                      pushFightIfNeeded);
                 latestLogFilePosition = chunk.EndPosition;
                 
-                progress?.Report($"Uploading latest log file {Path.GetFileName(latestLogFile)} ({Math.Min(100, chunk.EndPosition * 100 / latestLogFileInfo.Length)}%, {chunk.EndPosition}/{latestLogFileInfo.Length})");
+                progress?.Report($"Uploading latest log file {Path.GetFileName(latestLogFile)} ({Math.Min(100, chunk.EndPosition * 100 / latestLogFileInfo.Length)}%, {chunk.EndPosition}/{latestLogFileInfo.Length}), {FightsUploaded} fights uploaded");
 
                 if (token.IsCancellationRequested)
                     break;
@@ -213,11 +215,11 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
         
         // The official uploader will process 5000 lines of the log file at a time, maximum 8MB per chunk.
         // ACT log files should not be 8MB per 5000 lines, so we don't care about that.
-        await foreach (var chunk in ReadFileByChunkedLinesAsync(logFilePath))
+        await foreach (var chunk in LogReader.ReadFileChunkedLinesAsync(logFilePath))
         {
             segmentId = await UploadLogPartAsync(reportCode, chunk.Lines, chunk.EndPosition, chunk.IsEof, segmentId, region,
                                                  raidsToUpload ?? [], false, false, false);
-            progress?.Report($"Uploading log file ({Math.Min(100, chunk.EndPosition * 100 / logFileSize)}%, {chunk.EndPosition}/{logFileSize})");
+            progress?.Report($"Uploading log file ({Math.Min(100, chunk.EndPosition * 100 / logFileSize)}%, {chunk.EndPosition}/{logFileSize}), {FightsUploaded} fights uploaded");
         }
         
         progress?.Report("Finalizing FFLogs report");
@@ -239,73 +241,18 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
 
         return latestLogFile;
     }
-
-    private static readonly FieldInfo CharPosField = typeof(StreamReader).GetField("_charPos", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)!;
-    private static readonly FieldInfo CharLenField = typeof(StreamReader).GetField("_charLen", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)!;
-    private static readonly FieldInfo CharBufferField = typeof(StreamReader).GetField("_charBuffer", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)!;
-
-    private static long GetStreamPosition(StreamReader sr)
-    {
-        var charBuffer = (char[])CharBufferField.GetValue(sr)!;
-        var charLen = (int)CharLenField.GetValue(sr)!;
-        var charPos = (int)CharPosField.GetValue(sr)!;
-        
-        return sr.BaseStream.Position - sr.CurrentEncoding.GetByteCount(charBuffer, charPos, charLen - charPos);
-    }
-
-    // Enumerates through chunks of maxLinesPerChunk of the given file at a time.
-    // Returns a 3-tuple: (startPosition, isEof, lines)
-    private static async IAsyncEnumerable<FileChunk> ReadFileByChunkedLinesAsync(
-        string filePath, int maxLinesPerChunk = 5000, long startingPosition = 0L)
-    {
-        // Have to create a raw filestream for seeking first since StreamReader is horrendously unusable for seeking
-        // and determining stream position
-        await using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-
-        if (fs.CanSeek && startingPosition != 0L)
-            fs.Seek(startingPosition, SeekOrigin.Begin);
-        
-        using var sr = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-        var lines = new List<string>(maxLinesPerChunk);
-
-        while (true)
-        {
-            var line = await sr.ReadLineAsync();
-
-            if (line != null)
-            {
-                lines.Add(line);
-            }
-
-            // If there are enough lines in the chunk, or there are no lines left, yield what we have.
-            if (lines.Count >= maxLinesPerChunk || line == null)
-            {
-                yield return new FileChunk
-                {
-                    EndPosition = GetStreamPosition(sr),
-                    IsEof = line == null,
-                    Lines = lines,
-                };
-
-                if (line != null)
-                {
-                    lines = new List<string>(maxLinesPerChunk);
-                }
-            }
-
-            // If there are no lines left, break.
-            if (line == null)
-            {
-                break;
-            }
-        }
-    }
     
     private async Task<long> UploadLogPartAsync(
         string reportCode, List<string> lines, long startPosition, bool isEof, long segmentId, long region,
         List<LogParser.ScannedRaid> raidsToUpload, bool isLiveLog, bool isRealTime, bool pushFightIfNeeded)
     {
-        await logParser.ParseLinesAsync(lines, region, raidsToUpload, false, startPosition);
+        var result = await logParser.ParseLinesAsync(lines, region, raidsToUpload, false, startPosition);
+
+        if (!result.Success)
+        {
+            Plugin.Log.Error($"[LogUploader] Failed to parse log line {result.ParsedLineCount}\n{result.Line}\n{JsonConvert.SerializeObject(result.Exception, Formatting.Indented)}");
+            throw new LogUploaderException("Failed to parse a log line, please check Dalamud logs (/xllog)");
+        }
 
         var fightData = await logParser.CollectFightsAsync(
                             pushFightIfNeeded || (isEof && !isLiveLog),
@@ -378,6 +325,8 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
             throw;
         }
 
+        FightsUploaded += fightData.Fights.Count;
+
         await logParser.ClearFightsAsync();
         return addReportSegmentResponse.NextSegmentId;
     }
@@ -404,17 +353,29 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
         sb.Append('\n');
         sb.Append(masterInfo.ActorsString);
 
+        if (!masterInfo.ActorsString.EndsWith('\n'))
+            sb.Append('\n');
+
         sb.Append(masterInfo.LastAssignedAbilityId);
         sb.Append('\n');
         sb.Append(masterInfo.AbilitiesString);
+        
+        if (!masterInfo.AbilitiesString.EndsWith('\n'))
+            sb.Append('\n');
         
         sb.Append(masterInfo.LastAssignedTupleId);
         sb.Append('\n');
         sb.Append(masterInfo.TuplesString);
         
+        if (!masterInfo.TuplesString.EndsWith('\n'))
+            sb.Append('\n');
+        
         sb.Append(masterInfo.LastAssignedPetId);
         sb.Append('\n');
         sb.Append(masterInfo.PetsString);
+        
+        if (!masterInfo.PetsString.EndsWith('\n'))
+            sb.Append('\n');
 
         return sb.ToString();
     }
@@ -445,12 +406,5 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
         }
         
         return ms.ToArray();
-    }
-
-    private class FileChunk
-    {
-        public required long EndPosition;
-        public required bool IsEof;
-        public required List<string> Lines;
     }
 }
