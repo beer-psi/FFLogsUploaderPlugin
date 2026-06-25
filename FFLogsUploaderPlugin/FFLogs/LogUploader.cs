@@ -30,6 +30,7 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
         CancellationToken token = default)
     {
         progress?.Report("Live logging started.");
+        FightsUploaded = 0;
         await logParser.ClearAsync();
         
         progress?.Report("Creating FFLogs report.");
