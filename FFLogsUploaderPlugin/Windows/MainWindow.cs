@@ -229,10 +229,15 @@ public class MainWindow : Window, IAsyncDisposable
             {
                 plugin.Configuration.IncludeEntireFileInReport = includeEntireFileInReport;
                 plugin.Configuration.Save();
-            }   
+            }
+
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            {
+                ImGui.SetTooltip("Uploads the latest log file from the beginning; otherwise, only logs added\nsince starting live logging will be uploaded.");
+            }
         }
 
-        // This is outside of ImRaii.Disabled because the user needs to be able to stop logging.
+        // This is outside ImRaii.Disabled because the user needs to be able to stop logging.
         ImGui.Spacing();
         if (DrawActionButtonAndMessages(liveLogTokenSource == null ? "Start" : "Stop", liveLogProgressMessage, liveLogErrorMessage))
         {
@@ -247,7 +252,6 @@ public class MainWindow : Window, IAsyncDisposable
                 liveLogTokenSource = null;
                 liveLogTask = null;
                 isWorking = false;
-                liveLogProgressMessage = "Live logging stopped.";
             }
         }
         
