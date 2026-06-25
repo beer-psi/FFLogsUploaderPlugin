@@ -481,6 +481,7 @@ public class MainWindow : Window, IAsyncDisposable
         {
             Plugin.Log.Error(e, "Login failed");
             LoginErrorMessage = e.Message;
+            return;
         }
         finally
         {

@@ -116,6 +116,7 @@ public sealed class Plugin : IAsyncDalamudPlugin
             {
                 Log.Error(e, "Automatic login failed");
                 MainWindow.LoginErrorMessage = e.Message;
+                return;
             }
             finally
             {
