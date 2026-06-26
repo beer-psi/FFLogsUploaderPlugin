@@ -106,7 +106,11 @@ public class MainWindow : Window, IAsyncDisposable
             try
             {
                 await liveLogTask;
-            } catch (OperationCanceledException) { }
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.Error(e, "Error occured waiting for live logging to finish at plugin shutdown");
+            }
         }
             
         
