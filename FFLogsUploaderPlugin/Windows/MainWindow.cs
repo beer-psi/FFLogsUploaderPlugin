@@ -23,11 +23,17 @@ public class MainWindow : Window, IAsyncDisposable
     private readonly FileDialogManager fileDialogManager = new();
     private readonly IINACTIpc iinact;
 
-    private string email;
-    private string password;
+    private string email = string.Empty;
+    private string password = string.Empty;
     private bool automaticLogin;
-
-    private bool isWorking;
+    
+    private OperationStatus liveLoggingStatus = OperationStatus.Idle;
+    private OperationStatus uploadALogStatus = OperationStatus.Idle;
+    private OperationStatus splitALogStatus = OperationStatus.Idle;
+    private bool AnyOperationInProgress => liveLoggingStatus == OperationStatus.InProgress
+                                           || uploadALogStatus == OperationStatus.InProgress
+                                           || splitALogStatus == OperationStatus.InProgress;
+    
     private CancellationTokenSource? liveLogTokenSource;
     private Task? liveLogTask;
 
@@ -36,16 +42,22 @@ public class MainWindow : Window, IAsyncDisposable
     private int selectedGuildIndex;
     private int selectedRegionIndex;
     private int selectedVisibilityIndex;
+    
+    private long SelectedGuildValue => plugin.FfLogsUser?.GuildSelectItems[selectedGuildIndex].Value ?? 0L;
+    private long SelectedRegionValue => plugin.FfLogsUser?.RegionOrServerSelectItems[selectedRegionIndex].Value ?? 0L;
+    private long SelectedVisibilityValue =>
+        plugin.FfLogsUser?.ReportVisibilitySelectItems[selectedVisibilityIndex].Value ?? 0L;
+    
     private string reportDescription = string.Empty;
 
-    private string logFolder;
+    private string logFolder = string.Empty;
     private bool includeEntireFileInReport;
     private string liveLogProgressMessage = string.Empty;
     private Progress<string>? liveLogProgress;
     private string liveLogErrorMessage = string.Empty;
     private string liveLogReportCode = string.Empty;
 
-    private string logFilePath;
+    private string logFilePath = string.Empty;
     //private bool selectFightsToUpload;
     private string uploadALogProgressMessage = string.Empty;
     private Progress<string>? uploadALogProgress; 
@@ -70,16 +82,17 @@ public class MainWindow : Window, IAsyncDisposable
             MinimumSize = new Vector2(375, 330),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue)
         };
+        SizeCondition = ImGuiCond.FirstUseEver;
         
         this.plugin = plugin;
         iinact = new IINACTIpc(Plugin.PluginInterface);
-
-        email = this.plugin.Configuration.FfLogsEmail;
-        password = this.plugin.Configuration.FfLogsPassword;
-        automaticLogin = this.plugin.Configuration.FfLogsAutomaticLogin;
-        logFilePath = this.plugin.Configuration.LogFilePath;
-        logFolder = this.plugin.Configuration.LiveLogFolder;
-        includeEntireFileInReport = this.plugin.Configuration.IncludeEntireFileInReport;
+        
+        SetOptionsFromConfiguration();
+    }
+    
+    private enum OperationStatus {
+        Idle,
+        InProgress,
     }
 
     public async ValueTask DisposeAsync()
@@ -89,27 +102,42 @@ public class MainWindow : Window, IAsyncDisposable
         liveLogTokenSource = null;
 
         if (liveLogTask != null)
-            await liveLogTask;
+        {
+            try
+            {
+                await liveLogTask;
+            } catch (OperationCanceledException) { }
+        }
+            
         
         GC.SuppressFinalize(this);
     }
 
     public void SetOptionsFromConfiguration()
     {
+        email = plugin.Configuration.FfLogsEmail;
+        password = plugin.Configuration.FfLogsPassword;
+        automaticLogin = plugin.Configuration.FfLogsAutomaticLogin;
         logFilePath = plugin.Configuration.LogFilePath;
-        selectedGuildIndex =
-            plugin.FfLogsUser!.GuildSelectItems.FindIndex(item => item.Value ==
-                                                                      plugin.Configuration.SelectedGuildValue);
-        selectedRegionIndex =
-            plugin.FfLogsUser.RegionOrServerSelectItems.FindIndex(item => item.Value ==
-                                                                               plugin.Configuration.SelectedRegionValue);
-        selectedVisibilityIndex =
-            plugin.FfLogsUser.ReportVisibilitySelectItems.FindIndex(item => item.Value ==
-                                                                             plugin.Configuration.SelectedVisibilityValue);
+        logFolder = plugin.Configuration.LiveLogFolder;
+        includeEntireFileInReport = plugin.Configuration.IncludeEntireFileInReport;
 
-        if (selectedGuildIndex == -1) selectedGuildIndex = 0;
-        if (selectedRegionIndex == -1) selectedRegionIndex = 0;
-        if (selectedVisibilityIndex == -1) selectedVisibilityIndex = 0;
+        if (plugin.FfLogsUser != null)
+        {
+            selectedGuildIndex =
+                plugin.FfLogsUser!.GuildSelectItems.FindIndex(item => item.Value ==
+                                                                      plugin.Configuration.SelectedGuildValue);
+            selectedRegionIndex =
+                plugin.FfLogsUser.RegionOrServerSelectItems.FindIndex(item => item.Value ==
+                                                                              plugin.Configuration.SelectedRegionValue);
+            selectedVisibilityIndex =
+                plugin.FfLogsUser.ReportVisibilitySelectItems.FindIndex(item => item.Value ==
+                                                                            plugin.Configuration.SelectedVisibilityValue);
+
+            if (selectedGuildIndex == -1) selectedGuildIndex = 0;
+            if (selectedRegionIndex == -1) selectedRegionIndex = 0;
+            if (selectedVisibilityIndex == -1) selectedVisibilityIndex = 0;
+        }
     }
 
     public override void Draw()
@@ -183,14 +211,14 @@ public class MainWindow : Window, IAsyncDisposable
             if (ImGui.InputTextWithHint("Email##email", "Email", ref email,
                                         flags: ImGuiInputTextFlags.EnterReturnsTrue))
             {
-                Task.Run(DoLoginAsync);
+                DoLogin();
             }
         
             ImGui.SetNextItemWidth(-1);
             if (ImGui.InputTextWithHint("Password##password", "Password", ref password,
                                         flags: ImGuiInputTextFlags.Password | ImGuiInputTextFlags.EnterReturnsTrue))
             {
-                Task.Run(DoLoginAsync);
+                DoLogin();
             }
         
             ImGui.Checkbox("Automatically login", ref automaticLogin);
@@ -199,7 +227,7 @@ public class MainWindow : Window, IAsyncDisposable
 
             if (ImGui.Button(IsLoggingIn ? "Logging in..." : "Log in", new Vector2(-1, 30)))
             {
-                Task.Run(DoLoginAsync);
+                DoLogin();
             }
         }
 
@@ -212,7 +240,7 @@ public class MainWindow : Window, IAsyncDisposable
 
     private void DrawLiveLogTab()
     {
-        using (ImRaii.Disabled(isWorking))
+        using (ImRaii.Disabled(AnyOperationInProgress))
         {
             ImGui.Spacing();
             ImGui.Text("Folder ACT writes log files to:");
@@ -248,13 +276,18 @@ public class MainWindow : Window, IAsyncDisposable
             }
         }
 
-        // This is outside ImRaii.Disabled because the user needs to be able to stop logging.
+        // Keep this interactable if live logging is active so the user can stop it.
         ImGui.Spacing();
-        if (DrawActionButtonAndMessages(liveLogTokenSource == null ? "Start" : "Stop", liveLogProgressMessage, liveLogErrorMessage))
+        if (DrawActionButtonAndMessages(
+                liveLogTokenSource == null ? "Start" : "Stop",
+                uploadALogStatus == OperationStatus.InProgress || splitALogStatus == OperationStatus.InProgress,
+                liveLogProgressMessage,
+                liveLogErrorMessage)
+            )
         {
             if (liveLogTokenSource == null)
             {
-                DoLiveLog();
+                StartLiveLogging();
             }
             else
             {
@@ -262,7 +295,7 @@ public class MainWindow : Window, IAsyncDisposable
                 liveLogTokenSource.Dispose();
                 liveLogTokenSource = null;
                 liveLogTask = null;
-                isWorking = false;
+                liveLoggingStatus = OperationStatus.Idle;
             }
         }
         
@@ -291,7 +324,7 @@ public class MainWindow : Window, IAsyncDisposable
 
     private void DrawUploadALogTab()
     {
-        using (ImRaii.Disabled(isWorking))
+        using (ImRaii.Disabled(AnyOperationInProgress))
         {
             ImGui.Spacing();
             ImGui.Text("Log file to upload:");
@@ -324,9 +357,10 @@ public class MainWindow : Window, IAsyncDisposable
             // }
             //
             // ImGui.SameLine();
-            if (DrawActionButtonAndMessages("Upload", uploadALogProgressMessage, uploadALogErrorMessage))
-                Task.Run(DoUploadLogFileAsync);
         }
+        
+        if (DrawActionButtonAndMessages("Upload", AnyOperationInProgress, uploadALogProgressMessage, uploadALogErrorMessage))
+            DoUploadLogFile();
 
         if (!uploadALogReportCode.IsNullOrWhitespace())
         {
@@ -349,51 +383,10 @@ public class MainWindow : Window, IAsyncDisposable
             }
         }
     }
-
-    private void DrawSharedUploadOptions()
-    {
-        var guildNames = plugin.FfLogsUser!.GuildSelectItems.Select(item => item.Label).ToArray();
-        var regionNames = plugin.FfLogsUser!.RegionOrServerSelectItems.Select(item => item.Label).ToArray();
-        var visibilityNames = plugin.FfLogsUser!.ReportVisibilitySelectItems.Select(item => item.Label).ToArray();
-        
-        ImGui.Text("Guild to upload to:");
-        ImGui.SameLine();
-        
-        ImGui.SetNextItemWidth(150);
-        if (ImGui.Combo("##guild", ref selectedGuildIndex, guildNames))
-        {
-            plugin.Configuration.SelectedGuildValue = plugin.FfLogsUser!.GuildSelectItems[selectedGuildIndex].Value;
-            plugin.Configuration.Save();
-        }
-        ImGui.SameLine();
-
-        if (plugin.FfLogsUser!.GuildSelectItems[selectedGuildIndex].Value == -1)
-        {
-            ImGui.SetNextItemWidth(60);
-            if (ImGui.Combo("##region", ref selectedRegionIndex, regionNames))
-            {
-                plugin.Configuration.SelectedRegionValue = plugin.FfLogsUser!.RegionOrServerSelectItems[selectedRegionIndex].Value;
-                plugin.Configuration.Save();
-            }
-            ImGui.SameLine();
-        }
-        
-        ImGui.SetNextItemWidth(80);
-        if (ImGui.Combo("##visibility", ref selectedVisibilityIndex, visibilityNames))
-        {
-            plugin.Configuration.SelectedVisibilityValue = plugin.FfLogsUser!.ReportVisibilitySelectItems[selectedVisibilityIndex].Value;
-            plugin.Configuration.Save();
-        }
-
-        ImGui.Spacing();
-        ImGui.Text("Enter a description for the report:");
-        ImGui.SetNextItemWidth(-1);
-        ImGui.InputText("##description", ref reportDescription);
-    }
     
     private void DrawSplitALogTab()
     {
-        using (ImRaii.Disabled(isWorking))
+        using (ImRaii.Disabled(AnyOperationInProgress))
         {
             ImGui.Spacing();
             ImGui.Text("Log file to split:");
@@ -411,16 +404,91 @@ public class MainWindow : Window, IAsyncDisposable
                                                  },
                                                  1,
                                                  GetDialogStartPath(logFilePathToSplit));
-    
-            ImGui.Spacing();
-            if (DrawActionButtonAndMessages("Split", splitLogProgressMessage, splitLogErrorMessage))
-                Task.Run(DoSplitLogFileAsync);
         }
+        
+        ImGui.Spacing();
+        if (DrawActionButtonAndMessages("Split", AnyOperationInProgress, splitLogProgressMessage, splitLogErrorMessage))
+            Task.Run(DoSplitLogFileAsync);
     }
 
-    private static bool DrawActionButtonAndMessages(string buttonLabel, string progressMessage, string errorMessage)
+    private void DrawSettingsTab()
     {
-        var result = ImGui.Button(buttonLabel);
+        using (ImRaii.Disabled(AnyOperationInProgress))
+        {
+            ImGui.Spacing();
+            ImGui.Text($"Logged in as {plugin.FfLogsUser!.User.UserName}");
+
+            ImGui.SameLine();
+            if (ImGui.Button("Log out"))
+            {
+                Task.Run(plugin.FfLogsDesktopClient.LogoutAsync)
+                    .ContinueWith(task =>
+                    {
+                        if (task.Exception != null)
+                            Plugin.Log.Error(task.Exception, "Logout failed");
+
+                        plugin.FfLogsUser = null;
+                        email = string.Empty;
+                        password = string.Empty;
+                        automaticLogin = false;
+                        plugin.Configuration.FfLogsEmail = string.Empty;
+                        plugin.Configuration.FfLogsPassword = string.Empty;
+                        plugin.Configuration.FfLogsAutomaticLogin = false;
+
+                        plugin.Configuration.Save();
+                    });
+            }
+        }
+    }
+    
+    private void DrawSharedUploadOptions()
+    {
+        var guildNames = plugin.FfLogsUser!.GuildSelectItems.Select(item => item.Label).ToArray();
+        var regionNames = plugin.FfLogsUser!.RegionOrServerSelectItems.Select(item => item.Label).ToArray();
+        var visibilityNames = plugin.FfLogsUser!.ReportVisibilitySelectItems.Select(item => item.Label).ToArray();
+        
+        ImGui.Text("Guild to upload to:");
+        ImGui.SameLine();
+        
+        ImGui.SetNextItemWidth(150);
+        if (ImGui.Combo("##guild", ref selectedGuildIndex, guildNames))
+        {
+            plugin.Configuration.SelectedGuildValue = SelectedGuildValue;
+            plugin.Configuration.Save();
+        }
+        ImGui.SameLine();
+
+        if (plugin.FfLogsUser!.GuildSelectItems[selectedGuildIndex].Value == -1)
+        {
+            ImGui.SetNextItemWidth(60);
+            if (ImGui.Combo("##region", ref selectedRegionIndex, regionNames))
+            {
+                plugin.Configuration.SelectedRegionValue = SelectedRegionValue;
+                plugin.Configuration.Save();
+            }
+            ImGui.SameLine();
+        }
+        
+        ImGui.SetNextItemWidth(80);
+        if (ImGui.Combo("##visibility", ref selectedVisibilityIndex, visibilityNames))
+        {
+            plugin.Configuration.SelectedVisibilityValue = SelectedVisibilityValue;
+            plugin.Configuration.Save();
+        }
+
+        ImGui.Spacing();
+        ImGui.Text("Enter a description for the report:");
+        ImGui.SetNextItemWidth(-1);
+        ImGui.InputText("##description", ref reportDescription);
+    }
+    
+    private static bool DrawActionButtonAndMessages(string buttonLabel, bool isButtonDisabled, string progressMessage, string errorMessage)
+    {
+        bool result;
+        using (ImRaii.Disabled(isButtonDisabled))
+        {
+            result = ImGui.Button(buttonLabel);
+        }
         
         if (!progressMessage.IsNullOrWhitespace())
         {
@@ -436,23 +504,8 @@ public class MainWindow : Window, IAsyncDisposable
 
         return result;
     }
-
-    private void DrawSettingsTab()
-    {
-        using (ImRaii.Disabled(isWorking))
-        {
-            ImGui.Spacing();
-            ImGui.Text($"Logged in as {plugin.FfLogsUser!.User.UserName}");
-
-            ImGui.SameLine();
-            if (ImGui.Button("Log out"))
-            {
-                Task.Run(DoLogoutAsync);
-            }
-        }
-    }
-
-    private async Task DoLoginAsync()
+    
+    private void DoLogin()
     {
         if (email.IsNullOrWhitespace() || password.IsNullOrWhitespace())
         {
@@ -462,104 +515,101 @@ public class MainWindow : Window, IAsyncDisposable
         
         IsLoggingIn = true;
 
-        try
-        {
-            plugin.FfLogsUser = await plugin.FfLogsDesktopClient.LoginAsync(email, password);
-            Plugin.Log.Information("Logged in as {0}", plugin.FfLogsUser.User.UserName);
+        Task.Run(async () => plugin.FfLogsUser = await plugin.FfLogsDesktopClient.LoginAsync(email, password))
+                  .ContinueWith(task =>
+                  {
+                      IsLoggingIn = false;
 
-            if (automaticLogin)
-            {
-                plugin.Configuration.FfLogsEmail = email;
-                plugin.Configuration.FfLogsPassword = password;
-                plugin.Configuration.FfLogsAutomaticLogin = true;
-            }
-            else
-            {
-                plugin.Configuration.FfLogsEmail = string.Empty;
-                plugin.Configuration.FfLogsPassword = string.Empty;
-                plugin.Configuration.FfLogsAutomaticLogin = false;
-            }
+                      if (task.Exception != null)
+                      {
+                          Plugin.Log.Error(task.Exception, "Log in failed");
+                          LoginErrorMessage = task.Exception.InnerExceptions.FirstOrDefault(task.Exception).Message;
+                          return;
+                      }
 
-            plugin.Configuration.Save();
+                      if (plugin.FfLogsUser == null)
+                      {
+                          Plugin.Log.Error("Unexpected state: logged in successfully but FfLogsUser is null");
+                          return;
+                      }
+                      
+                      Plugin.Log.Information("Logged in as {0}", plugin.FfLogsUser.User.UserName);
+                      plugin.Configuration.FfLogsAutomaticLogin = automaticLogin;
 
-            email = string.Empty;
-            password = string.Empty;
-        }
-        catch (Exception e)
-        {
-            Plugin.Log.Error(e, "Login failed");
-            LoginErrorMessage = e.Message;
-            return;
-        }
-        finally
-        {
-            IsLoggingIn = false;
-        }
+                      if (plugin.Configuration.FfLogsAutomaticLogin)
+                      {
+                          plugin.Configuration.FfLogsEmail = email;
+                          plugin.Configuration.FfLogsPassword = password;
+                      }
+                      else
+                      {
+                          plugin.Configuration.FfLogsEmail = string.Empty;
+                          plugin.Configuration.FfLogsPassword = string.Empty;
+                      }
 
-        if (!plugin.FfLogParser.Started)
-        {
-            try
-            {
-                await plugin.FfLogParser.StartAsync(false, false, false,
-                                                    await plugin.FfLogsDesktopClient.DownloadParserScript(
-                                                        plugin.FfLogParser.Id, false, false, false));
-                Plugin.Log.Information("Parser version {0} loaded", await plugin.FfLogParser.GetParserVersionAsync());
-            }
-            catch (Exception e)
-            {
-                Plugin.Log.Error(e, "Loading parser failed");
-                ParserStartErrorMessage = e.Message;
-            }
-        }
+                      email = string.Empty;
+                      password = string.Empty;
+
+                      plugin.Configuration.Save();
+                      StartParser();
+                  });
     }
 
-    private async Task DoLogoutAsync()
+    internal void StartParser()
     {
-        try
+        Task.Run(async () =>
         {
-            await plugin.FfLogsDesktopClient.LogoutAsync();
-        }
-        catch (Exception e)
+            var script =
+                await plugin.FfLogsDesktopClient.DownloadParserScript(plugin.FfLogParser.Id, false, false, false);
+            await plugin.FfLogParser.StartAsync(false, false, false, script);
+        }).ContinueWith(task =>
         {
-            Plugin.Log.Error(e, "Logout failed");
-        }
-        
-        plugin.FfLogsUser = null;
-        email = string.Empty;
-        password = string.Empty;
-        automaticLogin = false;
-        plugin.Configuration.FfLogsEmail = string.Empty;
-        plugin.Configuration.FfLogsPassword = string.Empty;
-        plugin.Configuration.FfLogsAutomaticLogin = false;
-        
-        plugin.Configuration.Save();
+            if (task.Exception != null)
+            {
+                Plugin.Log.Error(task.Exception, "Loading parser failed");
+                ParserStartErrorMessage = task.Exception.InnerExceptions.FirstOrDefault(task.Exception).Message;
+                return;
+            }
+
+            Task.Run(plugin.FfLogParser.GetParserVersionAsync).ContinueWith(task1 =>
+            {
+                if (task1.Exception != null)
+                {
+                    Plugin.Log.Error(task1.Exception, "Getting plugin version failed");
+                    ParserStartErrorMessage = task1.Exception.InnerExceptions.FirstOrDefault(task1.Exception).Message;
+                    return;
+                }
+
+                Plugin.Log.Information("Parser version {0} loaded", task1.Result);
+            });
+        });
     }
 
-    private void DoLiveLog()
+    private void StartLiveLogging()
     {
-        isWorking = true;
+        liveLoggingStatus = OperationStatus.InProgress;
         liveLogReportCode = string.Empty;
         liveLogProgressMessage = string.Empty;
         liveLogErrorMessage = string.Empty;
 
         if (logFolder.IsNullOrWhitespace())
         {
-            isWorking = false;
+            liveLoggingStatus = OperationStatus.Idle;
             liveLogErrorMessage = "Path to log folder is missing.";
             return;
         }
 
         if (!Directory.Exists(logFolder))
         {
-            isWorking = false;
+            liveLoggingStatus = OperationStatus.Idle;
             liveLogErrorMessage = "Log folder does not exist or is a file.";
             return;
         }
 
         var uploader = new LogUploader(plugin.FfLogsDesktopClient, plugin.FfLogParser);
-        var guildId = plugin.FfLogsUser!.GuildSelectItems[selectedGuildIndex].Value;
-        var visibility = plugin.FfLogsUser!.ReportVisibilitySelectItems[selectedVisibilityIndex].Value;
-        var region = plugin.FfLogsUser!.RegionOrServerSelectItems[selectedRegionIndex].Value;
+        var guildId = SelectedGuildValue;
+        var visibility = SelectedVisibilityValue;
+        var region = SelectedRegionValue;
 
         if (liveLogProgress == null)
         {
@@ -568,101 +618,98 @@ public class MainWindow : Window, IAsyncDisposable
         }
 
         liveLogTokenSource ??= new CancellationTokenSource();
-        liveLogTask = Task.Run(async () =>
-        {
-            try
-            {
-                await uploader.StartLiveLogAsync(logFolder, region, visibility, guildId == -1 ? null : guildId,
-                                                 reportDescription,
-                                                 includeEntireFileInReport, liveLogProgress,
-                                                 reportCode => { liveLogReportCode = reportCode; },
-                                                 liveLogTokenSource.Token);
-            }
-            catch (Exception e)
-            {
-                Plugin.Log.Error(e, "Live logging operation failed");
-                liveLogProgressMessage = string.Empty;
-                liveLogErrorMessage = e.Message;
-            }
-            finally
-            {
-                isWorking = false;
-            }
-        });
+        liveLogTask = Task.Run(() => uploader.StartLiveLogAsync(logFolder, region, visibility,
+                                                                guildId == -1 ? null : guildId,
+                                                                reportDescription,
+                                                                includeEntireFileInReport, liveLogProgress,
+                                                                reportCode => { liveLogReportCode = reportCode; },
+                                                                liveLogTokenSource.Token))
+                          .ContinueWith(task =>
+                          {
+                              liveLoggingStatus = OperationStatus.Idle;
+                              
+                              if (task.Exception != null)
+                              {
+                                  Plugin.Log.Error(task.Exception, "Live logging operation failed");
+                                  liveLogProgressMessage = string.Empty;
+                                  liveLogErrorMessage = task.Exception.InnerExceptions.FirstOrDefault(task.Exception)
+                                                            .Message;
+                              }
+                          });
     }
 
-    private async Task DoUploadLogFileAsync()
+    private void DoUploadLogFile()
     {
-        isWorking = true;
+        uploadALogStatus = OperationStatus.InProgress;
         uploadALogReportCode = string.Empty;
         uploadALogProgressMessage = string.Empty;
         uploadALogErrorMessage = string.Empty;
         
         if (logFilePath.IsNullOrWhitespace())
         {
-            isWorking = false;
+            uploadALogStatus = OperationStatus.Idle;
             uploadALogErrorMessage = "Path to log file is missing.";
             return;
         }
         
         if (!File.Exists(logFilePath))
         {
-            isWorking = false;
+            uploadALogStatus = OperationStatus.Idle;
             uploadALogErrorMessage = "Log file does not exist, or is not a file.";
             return;
         }
         
         var uploader = new LogUploader(plugin.FfLogsDesktopClient, plugin.FfLogParser);
-        var guildId = plugin.FfLogsUser!.GuildSelectItems[selectedGuildIndex].Value;
-        var visibility = plugin.FfLogsUser!.ReportVisibilitySelectItems[selectedVisibilityIndex].Value;
-        var region = plugin.FfLogsUser!.RegionOrServerSelectItems[selectedRegionIndex].Value;
+        var guildId = SelectedGuildValue;
+        var visibility = SelectedVisibilityValue;
+        var region = SelectedRegionValue;
 
         if (uploadALogProgress == null)
         {
             uploadALogProgress = new Progress<string>();
             uploadALogProgress.ProgressChanged += (_, args) => { uploadALogProgressMessage = args; };
         }
-        
-        try
-        {
-            uploadALogReportCode = await uploader.UploadLogFileAsync(logFilePath, region, visibility, guildId == -1 ? null : guildId,
-                                         reportDescription, [], uploadALogProgress);
-        }
-        catch (Exception e)
-        {
-            Plugin.Log.Error(e, "Failed to upload log");
-            uploadALogErrorMessage = e.Message;
-        }
-        finally
-        {
-            isWorking = false;
-            uploadALogProgressMessage = string.Empty;
-        }
+
+        Task.Run(() => uploader.UploadLogFileAsync(logFilePath, region, visibility, guildId == -1 ? null : guildId,
+                                                   reportDescription, [], uploadALogProgress))
+            .ContinueWith(task =>
+            {
+                uploadALogStatus = OperationStatus.Idle;
+                uploadALogProgressMessage = string.Empty;
+                
+                if (task.Exception != null)
+                {
+                    Plugin.Log.Error(task.Exception, "Failed to upload log");
+                    uploadALogErrorMessage = task.Exception.InnerExceptions.FirstOrDefault(task.Exception).Message;
+                }
+                else
+                    uploadALogReportCode = task.Result;
+            });
     }
 
     private async Task DoSplitLogFileAsync()
     {
-        isWorking = true;
+        splitALogStatus = OperationStatus.InProgress;
         splitLogProgressMessage = string.Empty;
         splitLogErrorMessage = string.Empty;
 
         if (logFilePathToSplit.IsNullOrWhitespace())
         {
-            isWorking = false;
+            splitALogStatus = OperationStatus.Idle;
             splitLogErrorMessage = "Path to log file is missing.";
             return;
         }
 
         if (Path.GetFileName(logFilePathToSplit).StartsWith("Split-"))
         {
-            isWorking = false;
+            splitALogStatus = OperationStatus.Idle;
             splitLogErrorMessage = "Cowardly refusing to split a split log file.";
             return;
         }
 
         if (!File.Exists(logFilePathToSplit))
         {
-            isWorking = false;
+            splitALogStatus = OperationStatus.Idle;
             splitLogErrorMessage = "Log file does not exist, or is not a file.";
             return;
         }
@@ -790,7 +837,7 @@ public class MainWindow : Window, IAsyncDisposable
         }
         finally
         {
-            isWorking = false;
+            splitALogStatus = OperationStatus.Idle;
         }
     }
 

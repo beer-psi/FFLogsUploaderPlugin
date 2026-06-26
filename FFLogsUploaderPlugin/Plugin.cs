@@ -1,5 +1,4 @@
-﻿using System;
-using System.IO;
+﻿using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Game.Command;
@@ -42,9 +41,10 @@ public sealed class Plugin : IAsyncDalamudPlugin
         FfLogsDesktopClient = new DesktopClient();
         FfLogParser = new LogParser();
     }
-
-    public async Task LoadAsync(CancellationToken cancellationToken)
+    
+    public Task LoadAsync(CancellationToken cancellationToken)
     {
+        
         WindowSystem.AddWindow(MainWindow);
         
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
@@ -61,8 +61,11 @@ public sealed class Plugin : IAsyncDalamudPlugin
 
         // Adds another button doing the same but for the main ui of the plugin
         PluginInterface.UiBuilder.OpenMainUi += ToggleMainUi;
+        PluginInterface.UiBuilder.OpenConfigUi += ToggleMainUi;
+        
+        DoAutomaticLogin();
 
-        await DoAutomaticLoginAsync();
+        return Task.CompletedTask;
     }
 
     public async ValueTask DisposeAsync()
@@ -73,7 +76,7 @@ public sealed class Plugin : IAsyncDalamudPlugin
         
         // Unregister all actions to not leak anything during disposal of plugin
         PluginInterface.UiBuilder.Draw -= WindowSystem.Draw;
-        // PluginInterface.UiBuilder.OpenConfigUi -= ToggleConfigUi;
+        PluginInterface.UiBuilder.OpenConfigUi -= ToggleMainUi;
         PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;
         
         WindowSystem.RemoveAllWindows();
@@ -99,44 +102,31 @@ public sealed class Plugin : IAsyncDalamudPlugin
         });
     }
 
-    private async Task DoAutomaticLoginAsync()
+    private void DoAutomaticLogin()
     {
         if (Configuration.FfLogsAutomaticLogin && !Configuration.FfLogsEmail.IsNullOrWhitespace() &&
             !Configuration.FfLogsPassword.IsNullOrWhitespace())
         {
             MainWindow.IsLoggingIn = true;
-
-            try
-            {
-                FfLogsUser =
-                    await FfLogsDesktopClient.LoginAsync(Configuration.FfLogsEmail, Configuration.FfLogsPassword);
-                Log.Information("Logged in as {0}", FfLogsUser.User.UserName);
-            }
-            catch (Exception e)
-            {
-                Log.Error(e, "Automatic login failed");
-                MainWindow.LoginErrorMessage = e.Message;
-                return;
-            }
-            finally
-            {
-                MainWindow.IsLoggingIn = false;
-            }
-
-            MainWindow.SetOptionsFromConfiguration();
             
-            try
-            {
-                await FfLogParser.StartAsync(false, false, false,
-                                                    await FfLogsDesktopClient.DownloadParserScript(
-                                                        FfLogParser.Id, false, false, false));
-                Log.Information("Parser version {0} loaded", await FfLogParser.GetParserVersionAsync());
-            }
-            catch (Exception e)
-            {
-                Log.Error(e, "Loading parser failed");
-                MainWindow.ParserStartErrorMessage = e.Message;
-            }
+            Task.Run(() => FfLogsDesktopClient.LoginAsync(Configuration.FfLogsEmail, Configuration.FfLogsPassword))
+                .ContinueWith(task =>
+                {
+                    MainWindow.IsLoggingIn = false;
+                    
+                    if (task.Exception != null)
+                    {
+                        Log.Error(task.Exception, "Automatic login failed");
+                        MainWindow.LoginErrorMessage =
+                            task.Exception.InnerExceptions.FirstOrDefault(task.Exception).Message;
+                        return;
+                    }
+                    
+                    FfLogsUser = task.Result;
+                    Log.Information("Logged in as {0}", FfLogsUser.User.UserName);
+                    MainWindow.SetOptionsFromConfiguration();
+                    MainWindow.StartParser();
+                });
         }
     }
     
