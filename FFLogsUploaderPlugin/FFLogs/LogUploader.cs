@@ -26,7 +26,7 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
         string description = "",
         bool includeEntireFileInReport = false,
         IProgress<string>? progress = null,
-        Action<string>? reportCodeCallback = null,
+        Action<string>? onReportCreated = null,
         CancellationToken token = default)
     {
         progress?.Report("Live logging started.");
@@ -45,7 +45,7 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
                          visibility,
                          description,
                          token);
-        reportCodeCallback?.Invoke(report.Code);
+        onReportCreated?.Invoke(report.Code);
 
         await logParser.SetReportCodeAsync(report.Code);
 

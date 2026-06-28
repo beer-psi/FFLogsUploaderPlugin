@@ -227,14 +227,24 @@ public class DesktopClient : IDisposable
 
     private async Task<T> HandleResponse<T>(HttpResponseMessage resp)
     {
-        if (resp.IsSuccessStatusCode)
-        {
-            return JsonConvert.DeserializeObject<T>(await resp.Content.ReadAsStringAsync())!;
-        }
+        var content = await resp.Content.ReadAsStringAsync();
         
-        var error = JsonConvert.DeserializeObject<ErrorMessage>(await resp.Content.ReadAsStringAsync());
+        try
+        {
+            if (resp.IsSuccessStatusCode)
+            {
+                return JsonConvert.DeserializeObject<T>(content)!;
+            }
+        
+            var error = JsonConvert.DeserializeObject<ErrorMessage>(content);
 
-        throw new DesktopClientException(error?.Message ?? "Unknown error.");
+            throw new DesktopClientException(error?.Message ?? "Unknown error.");
+        }
+        catch (JsonReaderException e)
+        {
+            Plugin.Log.Error(e, "Failed to parse response as JSON: {0}", content);
+            throw;
+        }
     }
 
     private static string GenerateWebKitBoundary()

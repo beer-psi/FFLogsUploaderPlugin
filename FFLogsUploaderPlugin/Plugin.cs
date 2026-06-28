@@ -19,39 +19,38 @@ public sealed class Plugin : IAsyncDalamudPlugin
     [PluginService] internal static ICommandManager CommandManager { get; private set; } = null!;
     [PluginService] internal static IClientState ClientState { get; private set; } = null!;
     [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
+    [PluginService] internal static IDutyState DutyState { get; private set; } = null!;
     [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
+    [PluginService] internal static IToastGui ToastGui { get; private set; } = null!;
 
     private const string CommandName = "/pfflogs";
+    private const string CallWipeCommandName = "/callwipe";
 
     public Configuration Configuration { get; init; }
 
     public readonly WindowSystem WindowSystem = new("FFLogsUploaderPlugin");
-    private MainWindow MainWindow { get; init; }
+    internal MainWindow MainWindow { get; init; }
     
-    internal DesktopClient FfLogsDesktopClient { get; init; }
-    internal DesktopClient.LoginResponse? FfLogsUser { get; set; } = null;
-    internal LogParser FfLogParser { get; init; }
+    internal FfLogsManager FfLogs { get; init; }
 
     public Plugin()
     {
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        FfLogs = new FfLogsManager(this);
         MainWindow = new MainWindow(this);
-        FfLogsDesktopClient = new DesktopClient();
-        FfLogParser = new LogParser();
     }
     
     public Task LoadAsync(CancellationToken cancellationToken)
     {
-        
         WindowSystem.AddWindow(MainWindow);
         
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
             HelpMessage = "Opens the FFLogs uploader."
         });
-        CommandManager.AddHandler("/callwipe", new CommandInfo(OnCallWipe)
+        CommandManager.AddHandler(CallWipeCommandName, new CommandInfo(OnCallWipe)
         {
             HelpMessage = "Calls a wipe when live logging."
         });
@@ -62,29 +61,23 @@ public sealed class Plugin : IAsyncDalamudPlugin
         // Adds another button doing the same but for the main ui of the plugin
         PluginInterface.UiBuilder.OpenMainUi += ToggleMainUi;
         PluginInterface.UiBuilder.OpenConfigUi += ToggleMainUi;
-        
-        DoAutomaticLogin();
 
         return Task.CompletedTask;
     }
 
     public async ValueTask DisposeAsync()
     {
-        FfLogsUser = null;
-        FfLogParser.Dispose();
-        FfLogsDesktopClient.Dispose();
-        
         // Unregister all actions to not leak anything during disposal of plugin
         PluginInterface.UiBuilder.Draw -= WindowSystem.Draw;
         PluginInterface.UiBuilder.OpenConfigUi -= ToggleMainUi;
         PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;
         
         WindowSystem.RemoveAllWindows();
+        MainWindow.Dispose();
+        await FfLogs.DisposeAsync();
         
-        await MainWindow.DisposeAsync();
-
         CommandManager.RemoveHandler(CommandName);
-        CommandManager.RemoveHandler("/callwipe");
+        CommandManager.RemoveHandler(CallWipeCommandName);
     }
 
     private void OnCommand(string command, string args)
@@ -97,37 +90,9 @@ public sealed class Plugin : IAsyncDalamudPlugin
     {
         Task.Run(async () =>
         {
-            await FfLogParser.CallWipeAsync();
-            ChatGui.Print("[FFLogs Uploader] Called a wipe.");
+            await FfLogs.LogParser.CallWipeAsync();
+            ChatGui.Print("[FF Logs Uploader] Called a wipe.");
         });
-    }
-
-    private void DoAutomaticLogin()
-    {
-        if (Configuration.FfLogsAutomaticLogin && !Configuration.FfLogsEmail.IsNullOrWhitespace() &&
-            !Configuration.FfLogsPassword.IsNullOrWhitespace())
-        {
-            MainWindow.IsLoggingIn = true;
-            
-            Task.Run(() => FfLogsDesktopClient.LoginAsync(Configuration.FfLogsEmail, Configuration.FfLogsPassword))
-                .ContinueWith(task =>
-                {
-                    MainWindow.IsLoggingIn = false;
-                    
-                    if (task.Exception != null)
-                    {
-                        Log.Error(task.Exception, "Automatic login failed");
-                        MainWindow.LoginErrorMessage =
-                            task.Exception.InnerExceptions.FirstOrDefault(task.Exception).Message;
-                        return;
-                    }
-                    
-                    FfLogsUser = task.Result;
-                    Log.Information("Logged in as {0}", FfLogsUser.User.UserName);
-                    MainWindow.SetOptionsFromConfiguration();
-                    MainWindow.StartParser();
-                });
-        }
     }
     
     public void ToggleMainUi() => MainWindow.Toggle();
