@@ -5,12 +5,14 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Dalamud.Game.ClientState;
 using Dalamud.Game.DutyState;
 using Dalamud.Utility;
 using FFLogsUploaderPlugin.FFLogs;
 
 namespace FFLogsUploaderPlugin;
 
+// TODO: Starting when duty starts might not be a great idea for dungeons?
 internal class FfLogsManager : IAsyncDisposable
 {
     internal Plugin Plugin { get; init; }
@@ -21,7 +23,7 @@ internal class FfLogsManager : IAsyncDisposable
     private CancellationTokenSource? liveLogCts;
     private Task? liveLogTask;
 
-    private bool isDutyStarted;
+    private volatile bool isStoppingLiveLogging;
     
     internal bool IsLiveLogging => liveLogTask is { IsCompleted: false };
 
@@ -31,8 +33,7 @@ internal class FfLogsManager : IAsyncDisposable
         DesktopClient = new DesktopClient();
         LogParser = new LogParser();
 
-        Plugin.DutyState.DutyStarted += OnDutyStarted;
-        Plugin.ClientState.TerritoryChanged += OnTerritoryChanged;
+        Plugin.ClientState.ZoneInit += OnZoneInit;
         Plugin.DutyState.DutyWiped += OnDutyWipe;
     }
     
@@ -58,9 +59,8 @@ internal class FfLogsManager : IAsyncDisposable
                 liveLogTask = null;
             }
         }
-        
-        Plugin.DutyState.DutyStarted -= OnDutyStarted;
-        Plugin.ClientState.TerritoryChanged -= OnTerritoryChanged;
+
+        Plugin.ClientState.ZoneInit -= OnZoneInit;
         Plugin.DutyState.DutyWiped -= OnDutyWipe;
         User = null;
         LogParser.Dispose();
@@ -288,40 +288,46 @@ internal class FfLogsManager : IAsyncDisposable
         }
     }
 
-    private void OnDutyStarted(IDutyStateEventArgs args)
+    // ZoneInit
+    // - Valid duty and live logging is not active -> start live logging
+    // - No duty and live logging is active -> stop live logging
+    private void OnZoneInit(ZoneInitEventArgs args)
     {
-        isDutyStarted = true;
-        
-        // Ignore things that are duties but is generally not things people'd parse
-        // https://exd.camora.dev/sheet/ContentType
-        // all battle content have Unknown2 != 0, Guildhests = 2, PvP = 5
-        // covers Dungeons, Trials, Raids, Ultimate Raids, Chaotic Alliance Raids
-        if (args.ContentFinderCondition.ValueNullable?.ContentType.ValueNullable is null or { Unknown2: 0 or 2 or 5 })
+        var condition = args.ContentFinderCondition.ValueNullable;
+        var territoryType = args.TerritoryType.ValueNullable;
+
+        if (territoryType is null or { IsPvpZone: true })
         {
-            Plugin.Log.Debug(
-                "Ignoring automatic live logging for content type RowId={0} Name={1}",
-                args.ContentFinderCondition.ValueNullable?.ContentType.ValueNullable?.RowId.ToString() ?? "Unknown",
-                args.ContentFinderCondition.ValueNullable?.ContentType.ValueNullable?.Name.ToString() ?? string.Empty);
+            Plugin.Log.Debug("Ignoring unknown territory or PvP zone (RowId={0})", territoryType?.RowId ?? 0L);
             return;
         }
 
-        if (Plugin.Configuration.StartLiveLoggingWhenDutyStarts && LogParser.Started && !IsLiveLogging)
+        // https://exd.camora.dev/sheet/ContentType
+        // 1 = Dungeons, 3 = Trials, 4 = Raids, 6 = Ultimate Raids, 7 = Chaotic Alliance Raid
+        if (Plugin.Configuration.StartLiveLoggingWhenDutyStarts
+            && LogParser.Started
+            && !IsLiveLogging
+            && condition?.ContentType.ValueNullable is { Unknown2: 1 or 3 or 4 or 6 or 7 })
+        {
             Plugin.MainWindow.StartLiveLogging(true); // Call it there to also handle UI state
-    }
-
-    // We can't use OnDutyCompleted because ACT might not have written to the log file/we have not parsed the logs by then
-    private void OnTerritoryChanged(uint territoryType)
-    {
-        if (isDutyStarted && !Plugin.DutyState.IsDutyStarted)
-            OnDutyEnded();
-    }
-    
-    private void OnDutyEnded()
-    {
-        isDutyStarted = false;
-        
-        if (Plugin.Configuration.StopLiveLoggingWhenDutyEnds && LogParser.Started && IsLiveLogging)
-            StopLiveLogging();
+        }
+        else if (Plugin.Configuration.StopLiveLoggingWhenDutyEnds
+                 && LogParser.Started
+                 && IsLiveLogging
+                 && !isStoppingLiveLogging
+                 && condition is null or { RowId: 0 })
+        {
+            isStoppingLiveLogging = true;
+            
+            Task.Run(async () =>
+            {
+                Plugin.ChatGui.Print("[FF Logs Uploader] Duty ended. Stopping live logging after 5 seconds.");
+                await Task.Delay(TimeSpan.FromSeconds(5));
+                StopLiveLogging();
+                isStoppingLiveLogging = false;
+                Plugin.ChatGui.Print("[FF Logs Uploader] Live logging stopped.");
+            });
+        }
     }
 
     private void OnDutyWipe(IDutyStateEventArgs args)

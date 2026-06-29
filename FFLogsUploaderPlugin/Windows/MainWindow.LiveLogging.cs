@@ -22,6 +22,9 @@ public partial class MainWindow
     
     private void DrawLiveLogTab()
     {
+        if (!DrawParserStatus())
+            return;
+        
         using (ImRaii.Disabled(AnyOperationInProgress))
         {
             ImGui.Spacing();
@@ -128,7 +131,8 @@ public partial class MainWindow
 
         // It doesn't make a lot of sense to upload the entire log file every time if you're going to have 
         // live logging start and stop every duty, hence includeEntireFileInReport && !isAutomaticOperation
-        plugin.FfLogs.StartLiveLoggingAsync(logFolder, region, visibility, guildId == -1 ? null : guildId, reportDescription,
+        plugin.FfLogs.StartLiveLoggingAsync(logFolder, region, visibility, guildId == -1 ? null : guildId,
+                                            isAutomaticOperation ? string.Empty : reportDescription,
                                        includeEntireFileInReport && !isAutomaticOperation, liveLogProgress,
                                        reportCode => OnLiveLoggingReportCreated(reportCode, isAutomaticOperation))
               .ContinueWith(task =>

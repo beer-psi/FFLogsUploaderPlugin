@@ -1,6 +1,7 @@
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
+using Dalamud.Utility;
 
 namespace FFLogsUploaderPlugin.Windows;
 
@@ -42,41 +43,56 @@ public partial class MainWindow
     
     private void DrawSettingsTab()
     {
+        ImGui.Spacing();
+        if (plugin.FfLogs.User is { } user)
+        {
+            ImGui.Text($"Logged in as {user.User.UserName}");  
+            
+            ImGui.SameLine();
+            
+            // Disable logging out if logging is in operation or if the parser has not finished loading
+            // (either successfully or failed)
+            using (ImRaii.Disabled(AnyOperationInProgress ||
+                                   (!plugin.FfLogs.LogParser.Started && parserStartErrorMessage.IsNullOrWhitespace())))
+            {
+                if (ImGui.Button("Log out"))
+                {
+                    email = string.Empty;
+                    password = string.Empty;
+                    automaticLogin = false;
+
+                    Task.Run(plugin.FfLogs.LogoutAsync);
+                }
+            }
+        }
+        else
+        {
+            ImGui.Text("Currently not logged in.");
+        }
+        
+        
         using (ImRaii.Disabled(AnyOperationInProgress))
         {
-            ImGui.Spacing();
-            ImGui.Text($"Logged in as {plugin.FfLogs.User!.User.UserName}");
-
-            ImGui.SameLine();
-            if (ImGui.Button("Log out"))
-            {
-                email = string.Empty;
-                password = string.Empty;
-                automaticLogin = false;
-
-                Task.Run(plugin.FfLogs.LogoutAsync);
-            }
-            
-            if (ImGui.Checkbox("Start live logging when starting duty", ref startLiveLoggingWhenDutyStarts))
+            if (ImGui.Checkbox("Start live logging when entering duty", ref startLiveLoggingWhenDutyStarts))
             {
                 plugin.Configuration.StartLiveLoggingWhenDutyStarts = startLiveLoggingWhenDutyStarts;
                 plugin.Configuration.Save();
             }
-            
-            if (ImGui.IsItemHovered())
+
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             {
-                ImGui.SetTooltip("Start live logging when the \"Duty Started\" flytext appears and the ring around spawn is removed.\nUses options configured in the Live Log tab.\nDoes not trigger when loading into a duty that was in progress, or from loading in after a disconnect.");    
+                ImGui.SetTooltip("Covers dungeons, trials, raids, alliance raids, chaotic alliance raids, ultimate raids.\nOptions are taken from the Live Log tab, except \"Include entire file in report\"\nwill always be disabled, and description will always be empty.\nMay have issues with unsupported dungeons.");
             }
 
-            if (ImGui.Checkbox("Stop live logging when leaving duty", ref stopLiveLoggingWhenDutyEnds))
+            if (ImGui.Checkbox("Stop live logging 5 seconds after leaving duty", ref stopLiveLoggingWhenDutyEnds))
             {
                 plugin.Configuration.StopLiveLoggingWhenDutyEnds = stopLiveLoggingWhenDutyEnds;
                 plugin.Configuration.Save();
             }
 
-            if (ImGui.IsItemHovered())
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             {
-                ImGui.SetTooltip("May occasionally give invalid logs e.g. when viewing post-clear cutscenes");
+                ImGui.SetTooltip("The delay is necessary to allow ACT to finish writing logs, and for the uploader to finish parsing them.");
             }
 
             if (ImGui.Checkbox("Automatically call wipes when live logging", ref automaticallyCallDutyWipe))

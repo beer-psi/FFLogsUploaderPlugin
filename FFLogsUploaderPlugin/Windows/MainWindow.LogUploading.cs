@@ -22,6 +22,9 @@ public partial class MainWindow
 
     private void DrawUploadALogTab()
     {
+        if (!DrawParserStatus())
+            return;
+        
         using (ImRaii.Disabled(AnyOperationInProgress))
         {
             ImGui.Spacing();

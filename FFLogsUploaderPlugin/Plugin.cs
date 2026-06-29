@@ -1,13 +1,10 @@
-﻿using System.Linq;
-using System.Threading;
+﻿using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Game.Command;
 using Dalamud.Interface.Windowing;
 using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
-using Dalamud.Utility;
-using FFLogsUploaderPlugin.FFLogs;
 using FFLogsUploaderPlugin.Windows;
 
 namespace FFLogsUploaderPlugin;
@@ -15,12 +12,9 @@ namespace FFLogsUploaderPlugin;
 public sealed class Plugin : IAsyncDalamudPlugin
 {
     [PluginService] internal static IDalamudPluginInterface PluginInterface { get; private set; } = null!;
-    [PluginService] internal static ITextureProvider TextureProvider { get; private set; } = null!;
     [PluginService] internal static ICommandManager CommandManager { get; private set; } = null!;
     [PluginService] internal static IClientState ClientState { get; private set; } = null!;
-    [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
     [PluginService] internal static IDutyState DutyState { get; private set; } = null!;
-    [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
     [PluginService] internal static IToastGui ToastGui { get; private set; } = null!;
@@ -88,6 +82,12 @@ public sealed class Plugin : IAsyncDalamudPlugin
 
     private void OnCallWipe(string command, string args)
     {
+        if (!FfLogs.IsLiveLogging)
+        {
+            ChatGui.PrintError("[FF Logs Uploader] Currently not live logging, cannot call wipe.");
+            return;
+        }
+        
         Task.Run(async () =>
         {
             await FfLogs.LogParser.CallWipeAsync();

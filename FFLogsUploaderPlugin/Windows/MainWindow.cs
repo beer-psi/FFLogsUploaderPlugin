@@ -73,18 +73,6 @@ public partial class MainWindow : Window, IDisposable
             return;
         }
 
-        if (!parserStartErrorMessage.IsNullOrWhitespace())
-        {
-            ImGui.TextColored(new Vector4(1, 0.3f, 0.3f, 1), $"Parser failed to load, please check Dalamud logs (/xllog): {parserStartErrorMessage}");
-            return;
-        } 
-        
-        if (!plugin.FfLogs.LogParser.Started)
-        {
-            ImGui.Text("Loading parser...");
-            return;
-        }
-
         fileDialogManager.Draw();
         
         using var tabBar = ImRaii.TabBar("FFLogsTabs");
@@ -122,6 +110,23 @@ public partial class MainWindow : Window, IDisposable
                 }
             }
         }
+    }
+
+    private bool DrawParserStatus()
+    {
+        if (!parserStartErrorMessage.IsNullOrWhitespace())
+        {
+            ImGui.TextColored(new Vector4(1, 0.3f, 0.3f, 1), $"Parser failed to load, please check Dalamud logs (/xllog): {parserStartErrorMessage}");
+            return false;
+        } 
+        
+        if (!plugin.FfLogs.LogParser.Started)
+        {
+            ImGui.Text("Loading parser...");
+            return false;
+        }
+
+        return true;
     }
     
     private void DrawSharedUploadOptions()
