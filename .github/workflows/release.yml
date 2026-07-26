@@ -1,0 +1,20 @@
+name: "Create Release and Update Repository"
+
+on:
+    push:
+        tags:
+            - 'v*'
+
+permissions:
+    contents: "write"
+
+jobs:
+    release:
+        uses: beer-psi/DalamudPlugins/.github/workflows/reusable_create_release.yaml@trunk
+        with:
+            internal_name: FFLogsUploaderPlugin
+            solution_name: FFLogsUploaderPlugin
+            build_configuration: Release
+            personal_plugin_repo: beer-psi/DalamudPlugins
+            personal_plugin_repo_branch: trunk
+        secrets: inherit
