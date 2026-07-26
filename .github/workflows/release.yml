@@ -16,7 +16,7 @@ jobs:
             solution_name: "FFLogsUploaderPlugin"
             solution_path: "FFLogsUploaderPlugin.sln"
             build_configuration: "Release"
-            build_artifacts_path: "FFLogsUploaderPlugin/bin/Release/FFLogsUploaderPlugin"
+            build_artifacts_path: "./FFLogsUploaderPlugin/bin/x64/Release/FFLogsUploaderPlugin"
             personal_plugin_repo: "beer-psi/DalamudPlugins"
             personal_plugin_repo_branch: "trunk"
         secrets: "inherit"
