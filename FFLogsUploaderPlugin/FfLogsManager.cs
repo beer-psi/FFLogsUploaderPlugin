@@ -7,31 +7,41 @@ using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Game.ClientState;
 using Dalamud.Game.DutyState;
+using Dalamud.Interface.ImGuiNotification;
 using Dalamud.Utility;
 using FFLogsUploaderPlugin.FFLogs;
+using FFXIVClientStructs.FFXIV.Client.Game.UI;
+// ReSharper disable InconsistentNaming
 
 namespace FFLogsUploaderPlugin;
 
 // TODO: Starting when duty starts might not be a great idea for dungeons?
 internal class FfLogsManager : IAsyncDisposable
 {
-    internal Plugin Plugin { get; init; }
+    private Plugin Plugin { get; init; }
     internal DesktopClient DesktopClient { get; private set; }
     internal LogParser LogParser { get; private set; }
     internal DesktopClient.LoginResponse? User { get; private set; }
 
     private CancellationTokenSource? liveLogCts;
     private Task? liveLogTask;
-
     private volatile bool isStoppingLiveLogging;
+    private readonly Progress<string> liveLogProgress;
     
-    internal bool IsLiveLogging => liveLogTask is { IsCompleted: false };
+    public bool IsLiveLogging => liveLogTask is { IsCompleted: false };
+    
+    public event EventHandler<string>? LiveLoggingReportCreated;
+    public event EventHandler<string>? LiveLoggingProgress;
+    public event EventHandler<AggregateException?>? LiveLoggingEnded;
 
     internal FfLogsManager(Plugin plugin)
     {
         Plugin = plugin;
         DesktopClient = new DesktopClient();
         LogParser = new LogParser();
+
+        liveLogProgress = new Progress<string>();
+        liveLogProgress.ProgressChanged += (_, s) => OnLiveLoggingProgress(s);
 
         Plugin.ClientState.ZoneInit += OnZoneInit;
         Plugin.DutyState.DutyWiped += OnDutyWipe;
@@ -135,34 +145,59 @@ internal class FfLogsManager : IAsyncDisposable
 
         await LogParser.StartAsync(gameContentDetectionEnabled, metersEnabled, liveFightDataEnabled, script);
     }
-
+    
     internal Task StartLiveLoggingAsync(string logFolder,
-                                   long region,
-                                   long visibility,
-                                   long? guildId = null,
-                                   string description = "",
-                                   bool includeEntireFileInReport = false,
-                                   IProgress<string>? progress = null,
-                                   Action<string>? onReportCreated = null)
+                                        long region,
+                                        long visibility,
+                                        long? guildId = null,
+                                        string description = "",
+                                        bool includeEntireFileInReport = false)
     {
         liveLogCts = new CancellationTokenSource();
         liveLogTask = Task.Run(async () =>
         {
             var logUploader = new LogUploader(DesktopClient, LogParser);
-
+            
             await logUploader.StartLiveLogAsync(logFolder, region, visibility, guildId, description,
-                                                includeEntireFileInReport, progress,
-                                                onReportCreated, liveLogCts.Token);
-        });
+                                                includeEntireFileInReport, liveLogProgress,
+                                                OnLiveLoggingReportCreated,
+                                                liveLogCts.Token);
+        }).ContinueWith(task => OnLiveLoggingEnded(task.Exception));
 
         return liveLogTask;
     }
+    
+    internal Task StartLiveLoggingAsync(bool includeEntireFileInReport)
+    {
+        var logFolder = Plugin.Configuration.LiveLogFolder;
+        var region = Plugin.Configuration.SelectedRegionValue;
+        var visibility = Plugin.Configuration.SelectedVisibilityValue;
+        long? guildId = Plugin.Configuration.SelectedGuildValue == -1
+                      ? null : Plugin.Configuration.SelectedGuildValue;
 
+        return StartLiveLoggingAsync(logFolder, region, visibility, guildId, string.Empty, includeEntireFileInReport);
+    }
+    
     internal void StopLiveLogging()
     {
         liveLogCts?.Cancel();
         liveLogCts?.Dispose();
         liveLogCts = null;
+    }
+
+    protected virtual void OnLiveLoggingReportCreated(string reportCode)
+    {
+        LiveLoggingReportCreated?.Invoke(this, reportCode);
+    }
+
+    protected virtual void OnLiveLoggingProgress(string progress)
+    {
+        LiveLoggingProgress?.Invoke(this, progress);
+    }
+
+    protected virtual void OnLiveLoggingEnded(AggregateException? exception)
+    {
+        LiveLoggingEnded?.Invoke(this, exception);
     }
 
     internal Task<string> UploadLogFileAsync(
@@ -293,7 +328,7 @@ internal class FfLogsManager : IAsyncDisposable
     // - No duty and live logging is active -> stop live logging
     private void OnZoneInit(ZoneInitEventArgs args)
     {
-        var condition = args.ContentFinderCondition.ValueNullable;
+        var cfCondition = args.ContentFinderCondition.ValueNullable;
         var territoryType = args.TerritoryType.ValueNullable;
 
         if (territoryType is null or { IsPvpZone: true })
@@ -301,13 +336,36 @@ internal class FfLogsManager : IAsyncDisposable
             Plugin.Log.Debug("Ignoring unknown territory or PvP zone (RowId={0})", territoryType?.RowId ?? 0L);
             return;
         }
+        
+        unsafe
+        {
+            var cf = ContentsFinder.Instance();
+            ContentsFinderQueueInfo* cfQueueInfo;
 
-        // https://exd.camora.dev/sheet/ContentType
-        // 1 = Dungeons, 3 = Trials, 4 = Raids, 6 = Ultimate Raids, 7 = Chaotic Alliance Raid
+            if (
+                cf != null && (cfQueueInfo = cf->GetQueueInfo()) != null
+                           && (cfQueueInfo->PoppedContentIsUnrestrictedParty ||
+                               cfQueueInfo->PoppedContentIsExplorerMode)
+            )
+            {
+                Plugin.Log.Debug("Ignoring automatic live logging for unrestricted parties/explorer mode");
+                return;
+            }
+        }
+        
+        // To automatically start live logging:
+        // - User must enable the option
+        // - The parser has been successfully loaded
+        // - Is not already live logging
+        // - Duty has not started (should handle mid-duty joins)
+        // - Valid content type for parsing
+        //   - https://exd.camora.dev/sheet/ContentType
+        //   - 1 = Dungeons, 3 = Trials, 4 = Raids, 6 = Ultimate Raids, 7 = Chaotic Alliance Raid
         if (Plugin.Configuration.StartLiveLoggingWhenDutyStarts
             && LogParser.Started
             && !IsLiveLogging
-            && condition?.ContentType.ValueNullable is { Unknown2: 1 or 3 or 4 or 6 or 7 })
+            && !Plugin.DutyState.IsDutyStarted
+            && cfCondition?.ContentType.ValueNullable is { Unknown2: 1 or 3 or 4 or 6 or 7 })
         {
             Plugin.MainWindow.StartLiveLogging(true); // Call it there to also handle UI state
         }
@@ -315,7 +373,7 @@ internal class FfLogsManager : IAsyncDisposable
                  && LogParser.Started
                  && IsLiveLogging
                  && !isStoppingLiveLogging
-                 && condition is null or { RowId: 0 })
+                 && cfCondition is null or { RowId: 0 })
         {
             isStoppingLiveLogging = true;
             
@@ -337,12 +395,25 @@ internal class FfLogsManager : IAsyncDisposable
             {
                 if (task.Exception == null)
                 {
-                    Plugin.ToastGui.ShowNormal("Called wipe automatically.");
+                    Plugin.NotificationManager.AddNotification(new Notification
+                    {
+                        Type = NotificationType.Success,
+                        Title = "Called wipe automatically.",
+                        MinimizedText = "Called wipe automatically.",
+                        Minimized = true,
+                    });
                     return;
                 }
                 
                 Plugin.Log.Error(task.Exception, "Failed to automatically call a wipe");
-                Plugin.ToastGui.ShowError("Failed to automatically call a wipe, view /xllog for details");
+                Plugin.NotificationManager.AddNotification(new Notification
+                {
+                    Type = NotificationType.Error,
+                    Title = "Failed to automatically call a wipe",
+                    Content = "Use /callwipe to call a wipe manually. View logs from /xllog for details.",
+                    MinimizedText = "Failed to automatically call a wipe",
+                    Minimized = false,
+                });
             });
     }
 }

@@ -16,7 +16,6 @@ public partial class MainWindow
     private string logFolder = string.Empty;
     private bool includeEntireFileInReport;
     private string liveLogProgressMessage = string.Empty;
-    private Progress<string>? liveLogProgress;
     private string liveLogErrorMessage = string.Empty;
     private string liveLogReportCode = string.Empty;
     
@@ -37,9 +36,10 @@ public partial class MainWindow
                 fileDialogManager.OpenFolderDialog("Select Log Folder",
                                                    (success, path) =>
                                                    {
-                                                       if (success && !path.IsNullOrWhitespace())
-                                                           logFolder = path;
+                                                       if (!success || path.IsNullOrWhitespace())
+                                                           return;
 
+                                                       logFolder = path;
                                                        plugin.Configuration.LiveLogFolder = logFolder;
                                                        plugin.Configuration.Save();
                                                    },
@@ -123,37 +123,33 @@ public partial class MainWindow
         var visibility = SelectedVisibilityValue;
         var region = SelectedRegionValue;
 
-        if (liveLogProgress == null)
-        {
-            liveLogProgress = new Progress<string>();
-            liveLogProgress.ProgressChanged += (_, args) => { liveLogProgressMessage = args; };
-        }
-
         // It doesn't make a lot of sense to upload the entire log file every time if you're going to have 
         // live logging start and stop every duty, hence includeEntireFileInReport && !isAutomaticOperation
+        // TODO: For automatic live logging, allow a report description template to be used
         plugin.FfLogs.StartLiveLoggingAsync(logFolder, region, visibility, guildId == -1 ? null : guildId,
                                             isAutomaticOperation ? string.Empty : reportDescription,
-                                       includeEntireFileInReport && !isAutomaticOperation, liveLogProgress,
-                                       reportCode => OnLiveLoggingReportCreated(reportCode, isAutomaticOperation))
-              .ContinueWith(task =>
-              {
-                  liveLoggingStatus = OperationStatus.Idle;
-                  
-                  if (task.Exception != null)
-                  {
-                      Plugin.Log.Error(task.Exception, "Live logging operation failed");
-                      liveLogProgressMessage = string.Empty;
-                      liveLogErrorMessage = task.Exception.InnerExceptions.FirstOrDefault(task.Exception)
-                                                .Message;
-                  }
-              });
+                                            includeEntireFileInReport && !isAutomaticOperation);
     }
 
-    private void OnLiveLoggingReportCreated(string reportCode, bool isAutomaticOperation)
+    private void OnLiveLoggingProgress(object? sender, string progress)
+    {
+        liveLogProgressMessage = progress;
+    }
+
+    private void OnLiveLoggingReportCreated(object? sender, string reportCode)
     {
         liveLogReportCode = reportCode;
+    }
 
-        if (isAutomaticOperation)
-            Plugin.ChatGui.Print($"[FF Logs Uploader] Automatic live logging report created: https://www.fflogs.com/reports/{reportCode}");
+    private void OnLiveLoggingEnded(object? sender, AggregateException? exception)
+    {
+        liveLoggingStatus = OperationStatus.Idle;
+
+        if (exception == null)
+            return;
+        
+        Plugin.Log.Error(exception, "Live logging operation failed");
+        liveLogProgressMessage = string.Empty;
+        liveLogErrorMessage = exception.InnerExceptions.FirstOrDefault(exception).Message;
     }
 }

@@ -113,7 +113,7 @@ public partial class MainWindow
         if (uploadALogProgress == null)
         {
             uploadALogProgress = new Progress<string>();
-            uploadALogProgress.ProgressChanged += (_, args) => { uploadALogProgressMessage = args; };
+            uploadALogProgress.ProgressChanged += OnUploadLogProgress;
         }
 
         Task.Run(() => plugin.FfLogs.UploadLogFileAsync(logFilePath, region, visibility, guildId == -1 ? null : guildId,
@@ -131,5 +131,10 @@ public partial class MainWindow
                 else
                     uploadALogReportCode = task.Result;
             });
+    }
+
+    private void OnUploadLogProgress(object? sender, string progress)
+    {
+        uploadALogProgressMessage = progress;
     }
 }

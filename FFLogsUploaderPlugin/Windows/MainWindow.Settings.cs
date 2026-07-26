@@ -81,7 +81,7 @@ public partial class MainWindow
 
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             {
-                ImGui.SetTooltip("Covers dungeons, trials, raids, alliance raids, chaotic alliance raids, ultimate raids.\nOptions are taken from the Live Log tab, except \"Include entire file in report\"\nwill always be disabled, and description will always be empty.\nMay have issues with unsupported dungeons.");
+                ImGui.SetTooltip("Covers dungeons, trials, raids, alliance raids, chaotic alliance raids, ultimate raids.\nUnrestricted parties do not automatically start live logging, but duty support currently will.\nOptions are taken from the Live Log tab, except \"Include entire file in report\"\nwill always be disabled, and description will always be empty.\nMay have issues with unsupported dungeons.");
             }
 
             if (ImGui.Checkbox("Stop live logging 5 seconds after leaving duty", ref stopLiveLoggingWhenDutyEnds))

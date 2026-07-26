@@ -53,10 +53,18 @@ public partial class MainWindow : Window, IDisposable
         
         SetOptionsFromConfiguration();
         DoAutomaticLogin();
+        
+        plugin.FfLogs.LiveLoggingReportCreated += OnLiveLoggingReportCreated;
+        plugin.FfLogs.LiveLoggingProgress += OnLiveLoggingProgress;
+        plugin.FfLogs.LiveLoggingEnded += OnLiveLoggingEnded;
     }
 
     public void Dispose()
     {
+        plugin.FfLogs.LiveLoggingEnded -= OnLiveLoggingEnded;
+        plugin.FfLogs.LiveLoggingProgress -= OnLiveLoggingProgress;
+        plugin.FfLogs.LiveLoggingReportCreated -= OnLiveLoggingReportCreated;
+
         GC.SuppressFinalize(this);
     }
 
@@ -117,6 +125,7 @@ public partial class MainWindow : Window, IDisposable
         if (!parserStartErrorMessage.IsNullOrWhitespace())
         {
             ImGui.TextColored(new Vector4(1, 0.3f, 0.3f, 1), $"Parser failed to load, please check Dalamud logs (/xllog): {parserStartErrorMessage}");
+            ImGui.TextColored(new Vector4(1, 0.3f, 0.3f, 1), "Disable and re-enable the plugin to try again.");
             return false;
         } 
         
