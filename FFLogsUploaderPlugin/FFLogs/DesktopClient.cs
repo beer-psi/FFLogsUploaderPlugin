@@ -6,7 +6,6 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web;
 using HtmlAgilityPack;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -17,7 +16,7 @@ namespace FFLogsUploaderPlugin.FFLogs;
 public class DesktopClient : IDisposable
 {
     private const string BaseUrl = "https://www.fflogs.com";
-    private const string ArchonAppLiteVersion = "9.3.85";
+    private const string ArchonAppLiteVersion = "9.4.36";
     private const string UserAgent =
         $"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ArchonAppLite/{ArchonAppLiteVersion} Chrome/138.0.7204.251 Electron/37.9.0 Safari/537.36";
     
@@ -30,15 +29,12 @@ public class DesktopClient : IDisposable
 
     public DesktopClient()
     {
-        httpClient = new HttpClient(
-            new XsrfDelegatingHandler(
-                new HttpClientHandler
-                {
-                    CookieContainer = cookies,
-                    UseCookies = true,
-                },
-                cookies,
-                new Uri(BaseUrl)))
+        httpClient = new HttpClient(new HttpClientHandler
+                                    {
+                                        CookieContainer = cookies,
+                                        UseCookies = true,
+                                        AutomaticDecompression = DecompressionMethods.All
+                                    })
         {
             BaseAddress = new Uri(BaseUrl),
             DefaultRequestHeaders =
@@ -395,23 +391,3 @@ public class DesktopClient : IDisposable
     }
 }
 
-internal class XsrfDelegatingHandler(
-    HttpMessageHandler innerHandler,
-    CookieContainer cookies,
-    Uri baseUri
-) : DelegatingHandler(innerHandler)
-{
-    protected override Task<HttpResponseMessage> SendAsync(
-        HttpRequestMessage request, CancellationToken cancellationToken)
-    {
-        var xsrfCookie = cookies.GetCookies(baseUri)["XSRF-TOKEN"]?.Value;
-
-        if (xsrfCookie != null)
-        {
-            request.Headers.Remove("X-XSRF-TOKEN");
-            request.Headers.TryAddWithoutValidation("X-XSRF-TOKEN", HttpUtility.UrlDecode(xsrfCookie));
-        }
-
-        return base.SendAsync(request, cancellationToken);
-    }
-}
