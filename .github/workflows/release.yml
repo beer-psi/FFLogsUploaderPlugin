@@ -10,11 +10,13 @@ permissions:
 
 jobs:
     release:
-        uses: beer-psi/DalamudPlugins/.github/workflows/reusable_create_release.yaml@trunk
+        uses: "beer-psi/DalamudPlugins/.github/workflows/reusable_create_release.yaml@trunk"
         with:
-            internal_name: FFLogsUploaderPlugin
-            solution_name: FFLogsUploaderPlugin
-            build_configuration: Release
-            personal_plugin_repo: beer-psi/DalamudPlugins
-            personal_plugin_repo_branch: trunk
-        secrets: inherit
+            internal_name: "FFLogsUploaderPlugin"
+            solution_name: "FFLogsUploaderPlugin"
+            solution_path: "FFLogsUploaderPlugin.sln"
+            build_configuration: "Release"
+            build_artifacts_path: "FFLogsUploaderPlugin/bin/Release/FFLogsUploaderPlugin"
+            personal_plugin_repo: "beer-psi/DalamudPlugins"
+            personal_plugin_repo_branch: "trunk"
+        secrets: "inherit"
