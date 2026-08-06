@@ -16,7 +16,7 @@ namespace FFLogsUploaderPlugin.FFLogs;
 public class DesktopClient : IDisposable
 {
     private const string BaseUrl = "https://www.fflogs.com";
-    private const string ArchonAppLiteVersion = "9.4.36";
+    private const string ArchonAppLiteVersion = "9.5.0";
     private const string UserAgent =
         $"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ArchonAppLite/{ArchonAppLiteVersion} Chrome/138.0.7204.251 Electron/37.9.0 Safari/537.36";
     
