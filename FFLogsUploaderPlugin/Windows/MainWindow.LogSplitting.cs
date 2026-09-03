@@ -1,6 +1,7 @@
 using System.IO;
 using System.Linq;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Components;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Utility;
 
@@ -13,6 +14,7 @@ public partial class MainWindow
     private string logFilePathToSplit = string.Empty;
     private string splitLogProgressMessage = string.Empty;
     private string splitLogErrorMessage = string.Empty;
+    private bool splitLogGroupSameContent = false;
     
     private void DrawSplitALogTab()
     {
@@ -34,9 +36,19 @@ public partial class MainWindow
                                                  },
                                                  1,
                                                  GetDialogStartPath(logFilePathToSplit));
+
+            if (ImGui.Checkbox("Split when instanced content changes", ref splitLogGroupSameContent))
+            {
+                plugin.Configuration.SplitLogGroupSameContent = splitLogGroupSameContent;
+                plugin.Configuration.Save();
+            }
+
+            ImGuiComponents.HelpMarker(
+                "Instead of the default behavior of splitting when area changes. For instance, when splitting a log file with Raid A -> Limsa -> Raid A -> Limsa -> Raid B, the default behavior would create 5 log files, one for each area, but this will only create two splits, one for Raid A and one for Raid B.");
         }
         
         ImGui.Spacing();
+
         if (DrawActionButtonAndMessages("Split", AnyOperationInProgress, splitLogProgressMessage, splitLogErrorMessage))
             DoSplitLogFile();
     }
@@ -68,7 +80,7 @@ public partial class MainWindow
             return;
         }
      
-        FfLogsManager.SplitLogFileAsync(logFilePathToSplit).ContinueWith(task =>
+        FfLogsManager.SplitLogFileAsync(logFilePathToSplit, splitLogGroupSameContent).ContinueWith(task =>
         {
             splitALogStatus = OperationStatus.Idle;
      

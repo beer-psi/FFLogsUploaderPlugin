@@ -2,7 +2,7 @@
   "Author": "beerpsi",
   "Name": "FF Logs Uploader",
   "Punchline": "An unofficial in-game log uploader client for FF Logs",
-  "Changelog": "- Updated Archon App lite client version to 9.5.0 to enable logins",
+  "Changelog": "- Allow ",
   "Description": "An alternative to the Archon App for uploading logs to the FF Logs service. Basic features are covered: uploading a log, splitting a log file, live logging.",
   "RepoUrl": "https://github.com/beer-psi/FFLogsUploaderPlugin",
   "ApplicableVersion": "any",

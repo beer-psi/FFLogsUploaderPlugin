@@ -22,6 +22,7 @@ public partial class MainWindow
         automaticallyCallDutyWipe = plugin.Configuration.AutomaticallyCallDutyWipe;
         startLiveLoggingWhenDutyStarts = plugin.Configuration.StartLiveLoggingWhenDutyStarts;
         stopLiveLoggingWhenDutyEnds = plugin.Configuration.StopLiveLoggingWhenDutyEnds;
+        splitLogGroupSameContent = plugin.Configuration.SplitLogGroupSameContent;
 
         if (plugin.FfLogs.User != null)
         {

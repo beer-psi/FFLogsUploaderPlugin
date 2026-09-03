@@ -11,6 +11,9 @@ using Dalamud.Interface.ImGuiNotification;
 using Dalamud.Utility;
 using FFLogsUploaderPlugin.FFLogs;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
+using Lumina.Excel.Sheets;
+using Lumina.Extensions;
+
 // ReSharper disable InconsistentNaming
 
 namespace FFLogsUploaderPlugin;
@@ -214,7 +217,7 @@ internal class FfLogsManager : IAsyncDisposable
         return logUploader.UploadLogFileAsync(logFilePath, region, visibility, guildId, description, raidsToUpload, progress);
     }
 
-    internal static async Task SplitLogFileAsync(string logFilePathToSplit, IProgress<string>? progress = null)
+    internal static async Task SplitLogFileAsync(string logFilePathToSplit, bool groupSameContent, IProgress<string>? progress = null)
     {
         string? firstLogLine;
         await using (var fs = new FileStream(logFilePathToSplit, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
@@ -235,7 +238,8 @@ internal class FfLogsManager : IAsyncDisposable
             throw new SplitLogException("Invalid log file. First log line is missing a timestamp.");
         }
 
-        var currentZoneId = -1L;
+        uint lastZoneId = 0;
+        uint lastContentFinderId = 0; 
         var headerLines = new List<string>();
         await using var fs2 = new FileStream(logFilePathToSplit, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         using var sr2 = new StreamReader(fs2);
@@ -273,18 +277,30 @@ internal class FfLogsManager : IAsyncDisposable
 
             if (eventId == 1)
             {
-                if (!int.TryParse(lineSplit.ElementAtOrDefault(2), NumberStyles.HexNumber,
+                if (!uint.TryParse(lineSplit.ElementAtOrDefault(2), NumberStyles.HexNumber,
                                   CultureInfo.InvariantCulture, out var zoneId))
                 {
                     throw new SplitLogException($"Log file is invalid: line {lineNumber}'s zone ID is invalid");
                 }
 
-                if (currentZoneId == -1)
-                    currentZoneId = zoneId;
-                else if (zoneId != currentZoneId)
+                if (groupSameContent)
                 {
-                    shouldSplitLog = true;
-                    currentZoneId = zoneId;
+                    // If the user wants to group consecutive instanced raids together (regardless of in-between zones)
+                    // then we need to check what instanced raid this zone belongs to and compare it against the last value
+                    var contentFinderCondition = Plugin.DataManager
+                        .GetExcelSheet<ContentFinderCondition>()
+                        .FirstOrNull(cfc => cfc.TerritoryType.RowId == zoneId);
+
+                    if (contentFinderCondition != null)
+                    {
+                        shouldSplitLog = lastContentFinderId != 0 && contentFinderCondition.Value.RowId != lastContentFinderId;
+                        lastContentFinderId = contentFinderCondition.Value.RowId;
+                    }
+                }
+                else
+                {
+                    shouldSplitLog = lastZoneId != 0 && zoneId != lastZoneId;
+                    lastZoneId = zoneId;
                 }
             }
             else

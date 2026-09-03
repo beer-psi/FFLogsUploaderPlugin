@@ -20,10 +20,11 @@ public class Configuration : IPluginConfiguration
     public bool IncludeEntireFileInReport { get; set; } = false;
     
     public string LogFilePath { get; set; } = string.Empty;
-
+    
     public bool AutomaticallyCallDutyWipe { get; set; } = false;
     public bool StartLiveLoggingWhenDutyStarts { get; set; } = false;
     public bool StopLiveLoggingWhenDutyEnds { get; set; } = false;
+    public bool SplitLogGroupSameContent { get; set; } = false;
 
     // The below exists just to make saving less cumbersome
     public void Save()
