@@ -81,6 +81,7 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
         }
         
         latestLogFileInfo = latestLogFile != null ? new FileInfo(latestLogFile) : null;
+        var latestLogFileInfoTime = latestLogFileInfo != null ? DateTimeOffset.UtcNow.ToUnixTimeSeconds() : 0L;
         Plugin.Log.Debug("Catch-up completed: LatestLogFile={0} CurrentPosition={1} Length={2}", latestLogFile ?? "None",
                          latestLogFilePosition, latestLogFileInfo?.Length ?? 0L);
 
@@ -117,10 +118,12 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
                 // We already checked cancellation above.
                 // ReSharper disable once MethodSupportsCancellation
 #pragma warning disable CA2016
-                await Task.Delay(1000);
+                await Task.Delay(TimeSpan.FromSeconds(1));
 #pragma warning restore CA2016
                 continue;
             }
+            
+            var currentTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             
             // If there is a latest log file, and it is different from the current latest log file (aka there's a newer
             // one), then switch to reading that file
@@ -130,12 +133,17 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
                 
                 latestLogFile = newLatestLogFile;
                 latestLogFilePosition = 0L;
+                latestLogFileInfo = new FileInfo(latestLogFile);
+                latestLogFileInfoTime = currentTime;
+                
                 
                 progress?.Report($"Watching for new logs from {Path.GetFileName(latestLogFile)}.");
             }
-            
-            // Update log file info all the time so we get proper file sizes.
-            latestLogFileInfo = new FileInfo(latestLogFile);
+            else if (latestLogFileInfo == null || currentTime - latestLogFileInfoTime >= 1) 
+            {
+                latestLogFileInfo = new FileInfo(latestLogFile);
+                latestLogFileInfoTime = currentTime;
+            }
 
             // Push fights if the log file has not changed for 120 seconds, or if cancellation is requested.
             var isIdleLogFile = DateTime.UtcNow.Subtract(File.GetLastWriteTimeUtc(latestLogFile)).TotalSeconds > 120;
@@ -163,16 +171,29 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
                     }
                 }
                 
-                segmentId = await UploadLogPartAsync(report.Code, chunk.Lines, chunk.EndPosition, chunk.IsEof,
-                                                     segmentId,
-                                                     region, [], true, false,
-                                                     pushFightIfNeeded);
                 latestLogFilePosition = chunk.EndPosition;
-                
-                progress?.Report($"Uploading latest log file {Path.GetFileName(latestLogFile)} ({Math.Min(100, chunk.EndPosition * 100 / latestLogFileInfo.Length)}%, {chunk.EndPosition}/{latestLogFileInfo.Length}), {FightsUploaded} fights uploaded");
+
+                if (chunk.Lines.Count > 0)
+                {
+                    segmentId = await UploadLogPartAsync(report.Code, chunk.Lines, chunk.EndPosition, chunk.IsEof,
+                                                         segmentId,
+                                                         region, [], true, false,
+                                                         pushFightIfNeeded);
+                    progress?.Report($"Uploading latest log file {Path.GetFileName(latestLogFile)} ({Math.Min(100, chunk.EndPosition * 100 / latestLogFileInfo.Length)}%, {chunk.EndPosition}/{latestLogFileInfo.Length}), {FightsUploaded} fights uploaded");
+                }
 
                 if (token.IsCancellationRequested)
                     break;
+
+                if (chunk.IsEof)
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromMilliseconds(500), token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
             }
             
             if (token.IsCancellationRequested)
@@ -260,16 +281,12 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
                             false);
         var hasInProgressFight = false;
 
-        if (isLiveLog && fightData.Fights.Count <= 0)
+        if (isLiveLog && isRealTime && fightData.Fights.Count <= 0)
         {
             var inProgressFightData = await logParser.CollectInProgressFightAsync();
 
             hasInProgressFight = inProgressFightData.Fights.Count > 0;
-
-            if (isRealTime)
-            {
-                fightData = inProgressFightData;
-            }
+            fightData = inProgressFightData;
         }
 
         if (fightData.Fights.Count <= 0)
@@ -400,7 +417,7 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
         using var ms = new MemoryStream();
         using (var zipArchive = new ZipArchive(ms, ZipArchiveMode.Create))
         {
-            var entry = zipArchive.CreateEntry("log.txt", CompressionLevel.SmallestSize);
+            var entry = zipArchive.CreateEntry("log.txt", CompressionLevel.Fastest);
             using var sw = new StreamWriter(entry.Open());
         
             sw.Write(data);
