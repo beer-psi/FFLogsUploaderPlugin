@@ -5,9 +5,8 @@ using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
 using Dalamud.Plugin.Ipc.Exceptions;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 
-namespace FFLogsUploaderPlugin.Ipc;
+namespace FFLogsUploaderPlugin.Integration;
 
 public class IINACTIpc(IDalamudPluginInterface pluginInterface)
 {

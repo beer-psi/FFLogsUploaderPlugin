@@ -2,7 +2,7 @@
   "Author": "beerpsi",
   "Name": "FF Logs Uploader",
   "Punchline": "An unofficial in-game log uploader client for FF Logs",
-  "Changelog": "Improve performance when live logging.",
+  "Changelog": "- Add an option to reset EngageTimer every phase on ultimates. This requires live logging to be running.\n- Attempt to clean up native libraries used by the plugin after the plugin is unloaded.",
   "Description": "An alternative to the Archon App for uploading logs to the FF Logs service. Basic features are covered: uploading a log, splitting a log file, live logging.",
   "RepoUrl": "https://github.com/beer-psi/FFLogsUploaderPlugin",
   "ApplicableVersion": "any",

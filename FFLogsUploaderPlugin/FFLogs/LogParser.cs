@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.ClearScript;
@@ -266,6 +267,12 @@ public class LogParser(int id = 1) : IDisposable
     {
         await CallParserAsync<object?>(new ParserRequest { Id = id, Message = "call-wipe" }, "call-wipe-completed");
     }
+
+    public Task<CollectMetersResponseData> CollectMetersAsync()
+    {
+        return CallParserAsync<CollectMetersResponseData>(new ParserRequest { Id = id, Message = "collect-meters" },
+                                                          "collect-meters-completed");
+    }
     
     // collect-game-content
     // collect-meters
@@ -278,10 +285,28 @@ public class LogParser(int id = 1) : IDisposable
     {
         if (disposed) return;
         
-        engine.Dispose();
-        parserReceiveMessage = null;
-        
         disposed = true;
+        parserReceiveMessage = null;
+        engine.Dispose();
+
+        foreach (var dir in Directory.EnumerateDirectories(Path.GetTempPath(), "????????.???"))
+        {
+            var nativeLib = Path.Combine(dir, "ClearScriptV8.win-x64.dll");
+
+            if (!File.Exists(nativeLib))
+                continue;
+
+            if (Directory.EnumerateFileSystemEntries(dir).Count() > 1)
+                continue;
+
+            try
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        
         GC.SuppressFinalize(this);
     }
 
@@ -382,5 +407,60 @@ public class LogParser(int id = 1) : IDisposable
         public required string TuplesString { get; set; }
         public required long LastAssignedPetId { get; set; }
         public required string PetsString { get; set; }
+    }
+
+    public class CollectMetersResponseData
+    {
+        public long LogVersion { get; set; }
+        public bool InInstance { get; set; }
+        public bool Incremental { get; set; }
+        public List<MeterFight> Fights { get; set; } = [];
+        public required MeterLogger CurrentLogger { get; set; }
+        public required MeterZone CurrentZone { get; set; }
+    }
+
+    public class MeterFightSegment
+    {
+        public long Id { get; set; }
+        public required MeterZone Zone { get; set; }
+        public required MeterEncounter Encounter { get; set; }
+        public required string State { get; set; } // inprogress, kill, wipe
+        public long StartTime { get; set; }
+        public long EndTime { get; set; }
+        public long Downtime { get; set; }
+        // friendlyDamage
+        // friendlyHealing
+        // deaths
+        
+        // this is empty for fight segments, but it still exists in the data
+        public List<MeterFightSegment> Segments { get; set; } = [];
+        public List<long> NpcUnitGameIds { get; set; } = [];
+        public required MeterLogger Logger { get; set; }
+    }
+
+    public class MeterFight : MeterFightSegment
+    {
+        public List<string> Phases { get; set; } = [];
+    }
+
+    public class MeterLogger
+    {
+        public long ActorId { get; set; }
+        public required string Name { get; set; }
+        public required string ServerName { get; set; }
+        public required string ActorFullType { get; set; }
+    }
+
+    public class MeterZone
+    {
+        public int Id { get; set; }
+        public required string Name { get; set; }
+    }
+
+    public class MeterEncounter
+    {
+        public long Id { get; set; }
+        public required string Name { get; set; }
+        public required string Type { get; set; }
     }
 }

@@ -1,10 +1,13 @@
-﻿using System.Threading;
+﻿using System;
+using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Game.Command;
 using Dalamud.Interface.Windowing;
 using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
+using FFLogsUploaderPlugin.Integration;
 using FFLogsUploaderPlugin.Windows;
 
 namespace FFLogsUploaderPlugin;
@@ -29,12 +32,16 @@ public sealed class Plugin : IAsyncDalamudPlugin
     internal MainWindow MainWindow { get; init; }
     
     internal FfLogsManager FfLogs { get; init; }
+    internal EngageTimer EngageTimer { get; init; }
 
     public Plugin()
     {
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         FfLogs = new FfLogsManager(this);
         MainWindow = new MainWindow(this);
+        EngageTimer = new EngageTimer();
+
+        PluginInterface.ActivePluginsChanged += OnActivePluginsChanged;
     }
     
     public Task LoadAsync(CancellationToken cancellationToken)
@@ -66,6 +73,8 @@ public sealed class Plugin : IAsyncDalamudPlugin
         PluginInterface.UiBuilder.Draw -= WindowSystem.Draw;
         PluginInterface.UiBuilder.OpenConfigUi -= ToggleMainUi;
         PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;
+
+        PluginInterface.ActivePluginsChanged -= OnActivePluginsChanged;
         
         WindowSystem.RemoveAllWindows();
         MainWindow.Dispose();
@@ -75,10 +84,26 @@ public sealed class Plugin : IAsyncDalamudPlugin
         CommandManager.RemoveHandler(CallWipeCommandName);
     }
 
+    private void OnActivePluginsChanged(IActivePluginsChangedEventArgs args)
+    {
+        if (args.AffectedInternalNames.Contains("EngageTimer"))
+            EngageTimer.ReloadTypes();
+    }
+
     private void OnCommand(string command, string args)
     {
-        // In response to the slash command, toggle the display status of our main ui
-        MainWindow.Toggle();
+        if (string.IsNullOrEmpty(args))
+        {
+            // In response to the slash command, toggle the display status of our main ui
+            MainWindow.Toggle();
+            return;
+        }
+
+        if (string.Equals(args, "engagetimerstart", StringComparison.InvariantCultureIgnoreCase))
+        {
+            EngageTimer.CombatStart = DateTime.Now;
+            ChatGui.Print($"Overridden CombatStart={EngageTimer.CombatStart}", "FF Logs Uploader");
+        }
     }
 
     private void OnCallWipe(string command, string args)

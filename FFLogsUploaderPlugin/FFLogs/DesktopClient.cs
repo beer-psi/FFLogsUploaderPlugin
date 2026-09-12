@@ -166,7 +166,7 @@ public class DesktopClient : IDisposable
     {
         // ReSharper disable once UseStringInterpolation
         var uri = string.Format(
-            "{0}/desktop-client/parser?id={1}&ts={2}&gameContentDetectionEnabled={3}&metersEnabled={4}&liveFightDataEnabled={5}",
+            "{0}/desktop-client/parser?id={1}&ts={2}&gameContentDetectionEnabled={3}&metersEnabled={4}&liveFightDataEnabled={5}&gameVersionId=ff-live",
             BaseUrl,
             id,
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),

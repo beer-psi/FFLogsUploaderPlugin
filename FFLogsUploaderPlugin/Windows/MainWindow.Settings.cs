@@ -1,5 +1,7 @@
+using System;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.ImGuiNotification;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Utility;
 
@@ -10,6 +12,7 @@ public partial class MainWindow
     private bool automaticallyCallDutyWipe;
     private bool startLiveLoggingWhenDutyStarts;
     private bool stopLiveLoggingWhenDutyEnds;
+    private bool engageTimerPerPhase;
     
     public void SetOptionsFromConfiguration()
     {
@@ -23,6 +26,7 @@ public partial class MainWindow
         startLiveLoggingWhenDutyStarts = plugin.Configuration.StartLiveLoggingWhenDutyStarts;
         stopLiveLoggingWhenDutyEnds = plugin.Configuration.StopLiveLoggingWhenDutyEnds;
         splitLogGroupSameContent = plugin.Configuration.SplitLogGroupSameContent;
+        engageTimerPerPhase = plugin.Configuration.EngageTimerPerPhase;
 
         if (plugin.FfLogs.User != null)
         {
@@ -100,6 +104,19 @@ public partial class MainWindow
             {
                 plugin.Configuration.AutomaticallyCallDutyWipe = automaticallyCallDutyWipe;
                 plugin.Configuration.Save();
+            }
+
+            if (ImGui.Checkbox("EngageTimer stopwatch resets on phase change", ref engageTimerPerPhase))
+            {
+                plugin.Configuration.EngageTimerPerPhase = engageTimerPerPhase;
+                plugin.Configuration.Save();
+
+                StartParser();
+            }
+
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            {
+                ImGui.SetTooltip("- Requires EngageTimer plugin installed (duh).\n- Only applies to things FFLogs consider to have phases (which are basically only ultimates)\n- Live logging must be active for the stopwatch to reset every phase.");
             }
         }
     }

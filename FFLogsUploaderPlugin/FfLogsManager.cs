@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Game.ClientState;
@@ -24,6 +25,7 @@ internal class FfLogsManager : IAsyncDisposable
     private Plugin Plugin { get; init; }
     internal DesktopClient DesktopClient { get; private set; }
     internal LogParser LogParser { get; private set; }
+    internal LogParser MetersLogParser { get; private set; }
     internal DesktopClient.LoginResponse? User { get; private set; }
 
     private CancellationTokenSource? liveLogCts;
@@ -42,6 +44,7 @@ internal class FfLogsManager : IAsyncDisposable
         Plugin = plugin;
         DesktopClient = new DesktopClient();
         LogParser = new LogParser();
+        MetersLogParser = new LogParser(2);
 
         liveLogProgress = new Progress<string>();
         liveLogProgress.ProgressChanged += (_, s) => OnLiveLoggingProgress(s);
@@ -77,6 +80,7 @@ internal class FfLogsManager : IAsyncDisposable
         Plugin.DutyState.DutyWiped -= OnDutyWipe;
         User = null;
         LogParser.Dispose();
+        MetersLogParser.Dispose();
         DesktopClient.Dispose();
         
         GC.SuppressFinalize(this);
@@ -144,9 +148,11 @@ internal class FfLogsManager : IAsyncDisposable
 
     internal async Task StartParserAsync(bool gameContentDetectionEnabled, bool metersEnabled, bool liveFightDataEnabled)
     {
-        var script = await DesktopClient.DownloadParserScript(LogParser.Id, gameContentDetectionEnabled, metersEnabled, liveFightDataEnabled);
+        var script = await DesktopClient.DownloadParserScript(LogParser.Id, gameContentDetectionEnabled, false, false);
+        var script2 = await DesktopClient.DownloadParserScript(MetersLogParser.Id, gameContentDetectionEnabled, metersEnabled, liveFightDataEnabled);
 
-        await LogParser.StartAsync(gameContentDetectionEnabled, metersEnabled, liveFightDataEnabled, script);
+        await LogParser.StartAsync(gameContentDetectionEnabled, false, false, script);
+        await MetersLogParser.StartAsync(gameContentDetectionEnabled, metersEnabled, liveFightDataEnabled, script2);
     }
     
     internal Task StartLiveLoggingAsync(string logFolder,
@@ -159,12 +165,31 @@ internal class FfLogsManager : IAsyncDisposable
         liveLogCts = new CancellationTokenSource();
         liveLogTask = Task.Run(async () =>
         {
-            var logUploader = new LogUploader(DesktopClient, LogParser);
-            
-            await logUploader.StartLiveLogAsync(logFolder, region, visibility, guildId, description,
-                                                includeEntireFileInReport, liveLogProgress,
-                                                OnLiveLoggingReportCreated,
-                                                liveLogCts.Token);
+            // This is a bit of a hack, but since we do a lot of serialization between the log parser in V8 and the
+            // .NET code, there is a lot of GC pressure. While this has also been alleviated with changes in other places,
+            // setting this to SustainedLowLatency during live logging prevents the game from stuttering badly during
+            // live logging, should bad come to worse.
+            // TODO: Make this a configurable option.
+            var oldLatencyMode = GCSettings.LatencyMode;
+            GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
+
+            try
+            {
+                var logUploader = new LogUploader(
+                    DesktopClient,
+                    LogParser,
+                    Plugin.Configuration.EngageTimerPerPhase ? MetersLogParser : null,
+                    Plugin.Configuration.EngageTimerPerPhase ? Plugin.EngageTimer : null);
+
+                await logUploader.StartLiveLogAsync(logFolder, region, visibility, guildId, description,
+                                                    includeEntireFileInReport, liveLogProgress,
+                                                    OnLiveLoggingReportCreated,
+                                                    liveLogCts.Token);
+            } 
+            finally
+            {
+                GCSettings.LatencyMode = oldLatencyMode;
+            }
         }).ContinueWith(task => OnLiveLoggingEnded(task.Exception));
 
         return liveLogTask;

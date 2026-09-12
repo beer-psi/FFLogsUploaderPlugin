@@ -26,6 +26,8 @@ public class Configuration : IPluginConfiguration
     public bool StopLiveLoggingWhenDutyEnds { get; set; } = false;
     public bool SplitLogGroupSameContent { get; set; } = false;
 
+    public bool EngageTimerPerPhase { get; set; } = false;
+
     // The below exists just to make saving less cumbersome
     public void Save()
     {

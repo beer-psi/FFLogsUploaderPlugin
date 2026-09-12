@@ -8,7 +8,7 @@ using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Dalamud.Utility;
-using FFLogsUploaderPlugin.Ipc;
+using FFLogsUploaderPlugin.Integration;
 
 namespace FFLogsUploaderPlugin.Windows;
 
@@ -129,7 +129,7 @@ public partial class MainWindow : Window, IDisposable
             return false;
         } 
         
-        if (!plugin.FfLogs.LogParser.Started)
+        if (!plugin.FfLogs.LogParser.Started || !plugin.FfLogs.MetersLogParser.Started)
         {
             ImGui.Text("Loading parser...");
             return false;
@@ -181,7 +181,7 @@ public partial class MainWindow : Window, IDisposable
     
     internal void StartParser()
     {
-        Task.Run(() => plugin.FfLogs.StartParserAsync(false, false, false))
+        Task.Run(() => plugin.FfLogs.StartParserAsync(false, engageTimerPerPhase, false))
             .ContinueWith(task =>
             {
                 if (task.Exception != null)

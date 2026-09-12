@@ -7,12 +7,14 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Utility;
+using FFLogsUploaderPlugin.Integration;
 using Newtonsoft.Json;
 using Serilog.Events;
 
 namespace FFLogsUploaderPlugin.FFLogs;
 
-public class LogUploader(DesktopClient desktopClient, LogParser logParser)
+public class LogUploader(
+    DesktopClient desktopClient, LogParser logParser, LogParser? metersLogParser = null, EngageTimer? engageTimer = null)
 {
     public class LogUploaderException(string message) : Exception(message);
     
@@ -32,6 +34,7 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
         progress?.Report("Live logging started.");
         FightsUploaded = 0;
         await logParser.ClearAsync();
+        await (metersLogParser?.ClearAsync() ?? Task.CompletedTask);
         
         progress?.Report("Creating FFLogs report.");
         var uploadTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -48,6 +51,7 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
         onReportCreated?.Invoke(report.Code);
 
         await logParser.SetReportCodeAsync(report.Code);
+        await (metersLogParser?.SetReportCodeAsync(report.Code) ?? Task.CompletedTask);
 
         var segmentId = 1L;
         var latestLogFile = FindLatestLogFileInFolder(logFolder);
@@ -57,7 +61,12 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
         if (latestLogFile != null && latestLogFileInfo is { Length: >0 })
         {
             if (!includeEntireFileInReport)
-                await logParser.SetLiveLoggingStartTimeAsync(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            {
+                var t = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                
+                await logParser.SetLiveLoggingStartTimeAsync(t);
+                await (metersLogParser?.SetLiveLoggingStartTimeAsync(t) ?? Task.CompletedTask);
+            }
 
             var catchupAction = includeEntireFileInReport ? "Uploading" : "Parsing";
             
@@ -173,7 +182,7 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
                 
                 latestLogFilePosition = chunk.EndPosition;
 
-                if (chunk.Lines.Count > 0)
+                if (chunk.Lines.Count > 0 || chunk.IsEof)
                 {
                     segmentId = await UploadLogPartAsync(report.Code, chunk.Lines, chunk.EndPosition, chunk.IsEof,
                                                          segmentId,
@@ -184,20 +193,36 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
 
                 if (token.IsCancellationRequested)
                     break;
-
-                if (chunk.IsEof)
-                    try
-                    {
-                        await Task.Delay(TimeSpan.FromMilliseconds(500), token);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
             }
             
-            if (token.IsCancellationRequested)
+            // Plugin.Log.Debug("[LogUploader] MetersLogParser={MetersLogParser} EngageTimer.CombatStart={CombatStart}",
+            //     metersLogParser, engageTimer?.CombatStart);
+
+            if (metersLogParser != null && engageTimer != null)
+            {
+                var meters = await metersLogParser.CollectMetersAsync();
+                var segment = meters.Fights.LastOrDefault()?.Segments.LastOrDefault();
+                
+                // Plugin.Log.Debug("[LogUploader] Zone={ZoneName} ", segment?.Zone.Name);
+
+                if (segment is { State: "inprogress" })
+                {
+                    var segmentStartTime = DateTimeOffset.FromUnixTimeMilliseconds(segment.StartTime).LocalDateTime;
+                    var combatStart = engageTimer.CombatStart;
+
+                    if (combatStart == null || segmentStartTime > combatStart)
+                        engageTimer.CombatStart = segmentStartTime;
+                }
+            }
+            
+            try
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(500), token);
+            }
+            catch (OperationCanceledException)
+            {
                 break;
+            }
         }
 
         await desktopClient.TerminateReport(report.Code);
@@ -276,6 +301,15 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
             throw new LogUploaderException("Failed to parse a log line, please check Dalamud logs (/xllog)");
         }
 
+        if (metersLogParser != null)
+        {
+            var metersResult =
+                await metersLogParser.ParseLinesAsync(lines, region, [], false, startPosition);
+
+            if (!metersResult.Success)
+                Plugin.Log.Warning($"[LogUploader] Failed to parse log line in meters parser {result.ParsedLineCount}\n{result.Line}\n{JsonConvert.SerializeObject(result.Exception, Formatting.Indented)}");
+        }
+
         var fightData = await logParser.CollectFightsAsync(
                             pushFightIfNeeded || (isEof && !isLiveLog),
                             false);
@@ -288,6 +322,8 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
             hasInProgressFight = inProgressFightData.Fights.Count > 0;
             fightData = inProgressFightData;
         }
+
+        // Plugin.Log.Debug("[LogUploader] Fights.Count={FightCount}", fightData.Fights.Count);
 
         if (fightData.Fights.Count <= 0)
         {
@@ -304,7 +340,7 @@ public class LogUploader(DesktopClient desktopClient, LogParser logParser)
 
         var masterTable = BuildMasterTable(fightData.LogVersion, fightData.GameVersion,
                                            fightData.LogFileDetails, masterInfo);
-
+        
         //Plugin.Log.Debug("[LogUploader] Master table: {0}", masterTable);
 
         try
