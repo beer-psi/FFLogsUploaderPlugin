@@ -10,6 +10,7 @@ using Dalamud.Game.ClientState;
 using Dalamud.Game.DutyState;
 using Dalamud.Interface.ImGuiNotification;
 using Dalamud.Utility;
+using FFLogsUploaderPlugin.Extensions;
 using FFLogsUploaderPlugin.FFLogs;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
 using Lumina.Excel.Sheets;
@@ -45,6 +46,7 @@ public class FFLogsManager : IAsyncDisposable
 
     private CancellationTokenSource? monitorCts;
     private Task? monitorTask;
+    private Task? collectTask;
     internal bool IsMonitoringActive => monitorTask is { IsCompleted: false };
     internal TimeSpan FightDuration { get; private set; } = TimeSpan.Zero;
     internal TimeSpan SegmentDuration { get; private set; } = TimeSpan.Zero;
@@ -290,71 +292,65 @@ public class FFLogsManager : IAsyncDisposable
     internal Task StartMetersLogCollectionAsync()
     {
         monitorCts = new CancellationTokenSource();
-        return monitorTask = Task.Run(async () =>
-         {
-             var liveLogFolder = plugin.Configuration.LiveLogFolder;
+        monitorTask = Task.Run(async () =>
+            {
+                var liveLogFolder = plugin.Configuration.LiveLogFolder;
 
-             if (liveLogFolder.IsNullOrWhitespace() || !Directory.Exists(liveLogFolder))
-                 return;
-             
-             Plugin.Log.Debug("Starting meters log collection, LogFolder={LogFolder}", liveLogFolder);
+                if (liveLogFolder.IsNullOrWhitespace() || !Directory.Exists(liveLogFolder))
+                    return;
 
-             var logReader = new DirectoryLogReader(liveLogFolder);
-             var lastCollect = DateTime.MinValue;
+                Plugin.Log.Debug("Starting meters log parsing, LogFolder={LogFolder}", liveLogFolder);
 
-             await MetersLogParser.ClearAsync();
-             await MetersLogParser.SetLiveLoggingStartTimeAsync(
-                 DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                var logReader = new DirectoryLogReader(liveLogFolder);
 
-             await foreach (var chunk in logReader.IterateChunksAsync(token: monitorCts.Token))
-             {
-                 if (chunk == null)
-                     continue;
-                 
-                 await MetersLogParser.ParseLinesAsync(
-                     chunk.Lines, plugin.Configuration.SelectedRegionValue, [], false,
-                     chunk.EndPosition);
+                await MetersLogParser.ClearAsync();
+                await MetersLogParser.SetLiveLoggingStartTimeAsync(
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
-                 var current = DateTime.UtcNow;
+                await foreach (var chunk in logReader.IterateChunksAsync(token: monitorCts.Token))
+                {
+                    if (chunk == null)
+                        continue;
 
-                 if (current - lastCollect < TimeSpan.FromMilliseconds(500))
-                     continue;
+                    await MetersLogParser.ParseLinesAsync(
+                        chunk.Lines, plugin.Configuration.SelectedRegionValue, [], false,
+                        chunk.EndPosition);
+                }
+            }, monitorCts.Token)
+            .ContinueWith(t =>
+            {
+                if (t.Exception is { } e)
+                    Plugin.Log.Error(e, "Meters log parsing failed");
+            }, monitorCts.Token);
+        collectTask = Task.Run(async () =>
+            {
+                Plugin.Log.Debug("Starting meters collection");
+                
+                while (true)
+                {
+                    if (await Task.DelayOrCancel(TimeSpan.FromMilliseconds(500), monitorCts.Token))
+                        break;
+                    
+                    var meters = await MetersLogParser.CollectMetersAsync();
+                    var fight = meters.Fights.LastOrDefault();
 
-                 lastCollect = current;
-                 var meters = await MetersLogParser.CollectMetersAsync();
-                 var fight = meters.Fights.LastOrDefault();
+                    if (fight == null)
+                        continue;
 
-                 if (fight is null or { Segments: [] })
-                     continue;
-                     
-                 var segment = fight.Segments.MaxBy(s => s.StartTime);
-
-                 // Plugin.Log.Debug("[LogUploader] Zone={ZoneName} ", segment?.Zone.Name);
-
-                 if (segment is not { State: "inprogress" })
-                     continue;
-                     
-                 var segmentStartTime = DateTimeOffset
-                     .FromUnixTimeMilliseconds(segment.StartTime)
-                     .LocalDateTime;
-                 var combatStart = plugin.EngageTimer.CombatStart;
-
-                 if (segmentStartTime <= combatStart)
-                     continue;
-
-                 Plugin.Log.Debug("EngageTimer: CombatStart Original={OriginalStart} Override={OverrideStart}",
-                     combatStart, segmentStartTime);
-                 plugin.EngageTimer.CombatStart = segmentStartTime;
-                 plugin.EngageTimer.CombatEnd =
-                     new DateTime(Math.Max(segmentStartTime.Ticks, DateTime.Now.Ticks));
-                 plugin.EngageTimer.InCombat = true;
-             }
-         }, monitorCts.Token)
-         .ContinueWith(t =>
-         {
-             if (t.Exception is { } e)
-                 Plugin.Log.Error(e, "Meters log collection failed");
-         }, monitorCts.Token);
+                    var segment = fight.Segments.MaxBy(s => s.StartTime);
+                    
+                    // Plugin.Log.Debug("Updating DTR entry: Fight={FightName} Segment={SegmentName}", fight.Encounter.Name, segment?.Encounter.Name);
+                    
+                    plugin.DtrBarEntry.Update(fight, segment);
+                }
+            }, monitorCts.Token)
+            .ContinueWith(t =>
+            {
+                if (t.Exception is { } e)
+                    Plugin.Log.Error(e, "Failed to collect meters");
+            }, monitorCts.Token);
+        
+        return Task.WhenAll(monitorTask, collectTask);
     }
 
     internal void StopMetersLogCollection()

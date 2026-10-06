@@ -105,7 +105,7 @@ public partial class MainWindow
                 plugin.Configuration.Save();
             }
 
-            if (ImGui.Checkbox("EngageTimer stopwatch resets on phase change", ref engageTimerPerPhase))
+            if (ImGui.Checkbox("Encounter stopwatch", ref engageTimerPerPhase))
             {
                 plugin.Configuration.EngageTimerPerPhase = engageTimerPerPhase;
                 plugin.Configuration.Save();
@@ -117,9 +117,7 @@ public partial class MainWindow
             }
 
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            {
-                ImGui.SetTooltip("- Requires EngageTimer plugin installed.\n- Scans for logs from the live logging folder and parses them for phase changes.\n- Only applies to things FFLogs consider to have phases (which are basically only ultimates).");
-            }
+                ImGui.SetTooltip("- Add a server info bar entry to display the current encounter (enemy pulls or ultimate phases)\nand the stopwatch for the current encounter.\n- The server info bar entry only appears while you are in a duty.\n- This works by parsing logs from the live log folder, so configure that too.");
         }
     }
 }

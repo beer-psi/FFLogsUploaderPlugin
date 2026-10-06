@@ -8,7 +8,6 @@ using Dalamud.Interface.Windowing;
 using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
-using FFLogsUploaderPlugin.Integration;
 using FFLogsUploaderPlugin.Windows;
 
 namespace FFLogsUploaderPlugin;
@@ -19,6 +18,8 @@ public sealed class Plugin : IAsyncDalamudPlugin
     [PluginService] internal static IDalamudPluginInterface PluginInterface { get; private set; } = null!;
     [PluginService] internal static ICommandManager CommandManager { get; private set; } = null!;
     [PluginService] internal static IClientState ClientState { get; private set; } = null!;
+    [PluginService] internal static ICondition Condition { get; private set; } = null!;
+    [PluginService] internal static IDtrBar DtrBar { get; private set; } = null!;
     [PluginService] internal static IDutyState DutyState { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
@@ -34,17 +35,15 @@ public sealed class Plugin : IAsyncDalamudPlugin
     internal MainWindow MainWindow { get; init; }
     
     // ReSharper disable once InconsistentNaming
+    internal DtrBarEntry DtrBarEntry { get; init; }
     internal FFLogsManager FFLogs { get; init; }
-    internal EngageTimer EngageTimer { get; init; }
 
     public Plugin()
     {
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
-        EngageTimer = new EngageTimer();
+        DtrBarEntry = new DtrBarEntry(this); 
         FFLogs = new FFLogsManager(this);
         MainWindow = new MainWindow(this);
-
-        PluginInterface.ActivePluginsChanged += OnActivePluginsChanged;
     }
     
     public Task LoadAsync(CancellationToken cancellationToken)
@@ -78,8 +77,6 @@ public sealed class Plugin : IAsyncDalamudPlugin
         PluginInterface.UiBuilder.Draw -= WindowSystem.Draw;
         PluginInterface.UiBuilder.OpenConfigUi -= ToggleMainUi;
         PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;
-
-        PluginInterface.ActivePluginsChanged -= OnActivePluginsChanged;
         
         WindowSystem.RemoveAllWindows();
         MainWindow.Dispose();
@@ -107,27 +104,7 @@ public sealed class Plugin : IAsyncDalamudPlugin
         }
     }
 
-    private void OnActivePluginsChanged(IActivePluginsChangedEventArgs args)
-    {
-        if (args.AffectedInternalNames.Contains("EngageTimer"))
-            EngageTimer.ReloadTypes();
-    }
-
-    private void OnCommand(string command, string args)
-    {
-        if (string.IsNullOrEmpty(args))
-        {
-            // In response to the slash command, toggle the display status of our main ui
-            MainWindow.Toggle();
-            return;
-        }
-
-        if (string.Equals(args, "engagetimerstart", StringComparison.InvariantCultureIgnoreCase))
-        {
-            EngageTimer.CombatStart = DateTime.Now;
-            ChatGui.Print($"Overridden CombatStart={EngageTimer.CombatStart}", "FF Logs Uploader");
-        }
-    }
+    private void OnCommand(string command, string args) => MainWindow.Toggle();
 
     private void OnCallWipe(string command, string args)
     {
