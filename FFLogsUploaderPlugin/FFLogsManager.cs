@@ -7,6 +7,7 @@ using System.Runtime;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Game.ClientState;
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.DutyState;
 using Dalamud.Interface.ImGuiNotification;
 using Dalamud.Utility;
@@ -541,6 +542,7 @@ public class FFLogsManager : IAsyncDisposable
             && LogParser.Started
             && !IsLiveLogging
             && !Plugin.DutyState.IsDutyStarted
+            && !Plugin.Condition[ConditionFlag.DutyRecorderPlayback]
             && cfCondition?.ContentType.ValueNullable is { Unknown2: 1 or 3 or 4 or 6 or 7 })
         {
             StartLiveLoggingAsync();
