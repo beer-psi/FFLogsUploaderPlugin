@@ -29,7 +29,7 @@ public class DtrBarEntry : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private void UpdateShown()
+    internal void UpdateShown()
     {
         dtrBarEntry.Shown = plugin.Configuration.EngageTimerPerPhase && Plugin.Condition.Any(ConditionFlag.BoundByDuty,
             ConditionFlag.BoundByDuty56,

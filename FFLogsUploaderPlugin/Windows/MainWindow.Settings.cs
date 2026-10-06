@@ -109,6 +109,8 @@ public partial class MainWindow
             {
                 plugin.Configuration.EngageTimerPerPhase = engageTimerPerPhase;
                 plugin.Configuration.Save();
+                
+                plugin.DtrBarEntry.UpdateShown();
 
                 if (engageTimerPerPhase && !plugin.FFLogs.IsMonitoringActive)
                     plugin.FFLogs.StartMetersLogCollectionAsync();
