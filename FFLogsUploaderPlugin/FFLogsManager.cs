@@ -342,7 +342,7 @@ public class FFLogsManager : IAsyncDisposable
                     
                     // Plugin.Log.Debug("Updating DTR entry: Fight={FightName} Segment={SegmentName}", fight.Encounter.Name, segment?.Encounter.Name);
                     
-                    plugin.DtrBarEntry.Update(fight, segment);
+                    plugin.DtrBarEntry.SetFightAndSegment(fight, segment);
                 }
             }, monitorCts.Token)
             .ContinueWith(t =>
