@@ -37,14 +37,14 @@ public sealed class Plugin : IAsyncDalamudPlugin
     internal MainWindow MainWindow { get; init; }
     
     // ReSharper disable once InconsistentNaming
-    internal DtrBarEntry DtrBarEntry { get; init; }
     internal FFLogsManager FFLogs { get; init; }
+    internal DtrBarEntry DtrBarEntry { get; init; }
 
     public Plugin()
     {
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
-        DtrBarEntry = new DtrBarEntry(this); 
         FFLogs = new FFLogsManager(this);
+        DtrBarEntry = new DtrBarEntry(this); 
         MainWindow = new MainWindow(this);
     }
     
