@@ -49,8 +49,8 @@ public class FFLogsManager : IAsyncDisposable
     private Task? monitorTask;
     private Task? collectTask;
     internal bool IsMonitoringActive => monitorTask is { IsCompleted: false };
-    internal TimeSpan FightDuration { get; private set; } = TimeSpan.Zero;
-    internal TimeSpan SegmentDuration { get; private set; } = TimeSpan.Zero;
+
+    public event EventHandler<LogParser.MeterFight>? MetersCollected;
     
     public FFLogsManager(Plugin plugin)
     {
@@ -338,11 +338,7 @@ public class FFLogsManager : IAsyncDisposable
                     if (fight == null)
                         continue;
 
-                    var segment = fight.Segments.MaxBy(s => s.StartTime);
-                    
-                    // Plugin.Log.Debug("Updating DTR entry: Fight={FightName} Segment={SegmentName}", fight.Encounter.Name, segment?.Encounter.Name);
-                    
-                    plugin.DtrBarEntry.SetFightAndSegment(fight, segment);
+                    OnMetersCollected(fight);
                 }
             }, monitorCts.Token)
             .ContinueWith(t =>
@@ -359,6 +355,11 @@ public class FFLogsManager : IAsyncDisposable
         monitorCts?.Cancel();
         monitorCts?.Dispose();
         monitorCts = null;
+    }
+    
+    protected virtual void OnMetersCollected(LogParser.MeterFight fight)
+    {
+        MetersCollected?.Invoke(this, fight);
     }
     
     internal Task<string> UploadLogFileAsync(
@@ -498,7 +499,14 @@ public class FFLogsManager : IAsyncDisposable
     }
 
     internal Task<long> GetParserVersionAsync() => LogParser.GetParserVersionAsync();
-    internal Task CallWipeAsync() => LogParser.CallWipeAsync();
+
+    internal async Task CallWipeAsync()
+    {
+        await LogParser.CallWipeAsync();
+        await MetersLogParser.CallWipeAsync();
+        // or else this contains literally all pulls since the start of the instance
+        await MetersLogParser.ClearMetersAsync();
+    }
     
     // ZoneInit
     // - Valid duty and live logging is not active -> start live logging

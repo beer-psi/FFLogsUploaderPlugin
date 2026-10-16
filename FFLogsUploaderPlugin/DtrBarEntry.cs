@@ -15,12 +15,16 @@ public class DtrBarEntry : IDisposable
     private readonly IDtrBarEntry dtrBarEntry;
     private LogParser.MeterFight? fight;
     private LogParser.MeterFightSegment? segment;
+    private DateTimeOffset segmentStartTime = DateTimeOffset.MinValue;
     
     public DtrBarEntry(Plugin plugin)
     {
         this.plugin = plugin;
+        
         dtrBarEntry = Plugin.DtrBar.Get("FFLogs Phase Timer");
         dtrBarEntry.OnClick = _ => plugin.ToggleMainUi();
+
+        plugin.FFLogs.MetersCollected += OnMetersCollected;
 
         Plugin.Condition.ConditionChange += OnConditionChange;
         Plugin.Framework.Update += OnFrameworkUpdate;
@@ -32,6 +36,8 @@ public class DtrBarEntry : IDisposable
     {
         Plugin.Framework.Update -= OnFrameworkUpdate;
         Plugin.Condition.ConditionChange -= OnConditionChange;
+        
+        plugin.FFLogs.MetersCollected -= OnMetersCollected;
 
         dtrBarEntry.Remove();
         GC.SuppressFinalize(this);
@@ -47,16 +53,31 @@ public class DtrBarEntry : IDisposable
     private void OnConditionChange(ConditionFlag flag, bool newValue) => UpdateShown();
 
     // ReSharper disable once ParameterHidesMember
-    public void SetFightAndSegment(LogParser.MeterFight fight, LogParser.MeterFightSegment? segment)
+    private void OnMetersCollected(object? sender, LogParser.MeterFight fight)
     {
         this.fight = fight;
-        this.segment = segment;
+        var newSegment = fight.Segments.LastOrDefault();
+        
+        if (newSegment != null
+            && (segment == null
+                || segment.Encounter.Name != newSegment.Encounter.Name
+                || segmentStartTime == DateTimeOffset.MinValue))
+            segmentStartTime = DateTimeOffset.FromUnixTimeMilliseconds(newSegment.StartTime);
+        else if (newSegment == null || segmentStartTime == DateTimeOffset.MinValue)
+            segmentStartTime = DateTimeOffset.FromUnixTimeMilliseconds(fight.StartTime);
+
+        segment = newSegment;
     }
 
     private void OnFrameworkUpdate(IFramework framework)
     {
         if (!dtrBarEntry.Shown)
             return;
+        
+        // ReSharper disable once LocalVariableHidesMember
+        var fight = this.fight;
+        // ReSharper disable once LocalVariableHidesMember
+        var segment = this.segment;
 
         if (fight == null)
         {
@@ -64,16 +85,18 @@ public class DtrBarEntry : IDisposable
             return;
         }
 
-        var encounterName = segment?.Encounter.Name ?? fight.Encounter.Name;
-        var startTime =
-            DateTimeOffset.FromUnixTimeMilliseconds(segment?.StartTime ?? fight.StartTime);
+        var state = segment?.State ?? fight.State;
         var isInCombat = Plugin.Condition[ConditionFlag.InCombat]
                       || Plugin.PartyList.Any(actor => actor.GameObject is ICharacter character &&
                                                        (character.StatusFlags & StatusFlags.InCombat) != 0);
-        var endTime = isInCombat
+        var isStateFinal = state != "inprogress";
+        var startTime = segmentStartTime;
+        var endTime = isInCombat || !isStateFinal
                           ? DateTimeOffset.UtcNow
                           : DateTimeOffset.FromUnixTimeMilliseconds(segment?.EndTime ?? fight.EndTime);
         var duration = endTime - startTime;
+        
+        var encounterName = segment?.Encounter.Name ?? fight.Encounter.Name;
 
         dtrBarEntry.Text = $"{encounterName} - {duration:mm\\:ss}";
     }
