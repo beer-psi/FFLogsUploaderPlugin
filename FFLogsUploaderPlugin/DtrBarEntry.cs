@@ -64,16 +64,9 @@ public class DtrBarEntry : IDisposable
         var newSegmentStartTime = newSegment != null
             ? DateTimeOffset.FromUnixTimeMilliseconds(newSegment.StartTime)
             : DateTimeOffset.MinValue;
-        
-        if ((newSegment != null
-             && (segment == null
-                 || newSegmentStartTime - segmentStartTime >= TimeSpan.FromSeconds(3)
-                 || segmentStartTime == DateTimeOffset.MinValue))
-            || newSegment == null
-            || segmentStartTime == DateTimeOffset.MinValue)
-            segmentStartTime = newSegmentStartTime;
 
         segment = newSegment;
+        segmentStartTime = newSegmentStartTime;
     }
 
     private void OnFrameworkUpdate(IFramework framework)
