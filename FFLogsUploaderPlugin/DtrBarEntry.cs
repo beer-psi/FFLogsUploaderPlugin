@@ -53,18 +53,25 @@ public class DtrBarEntry : IDisposable
     private void OnConditionChange(ConditionFlag flag, bool newValue) => UpdateShown();
 
     // ReSharper disable once ParameterHidesMember
-    private void OnMetersCollected(object? sender, LogParser.MeterFight fight)
+    private void OnMetersCollected(object? sender, LogParser.CollectMetersResponseData meters)
     {
-        this.fight = fight;
+        fight = meters.Fights.LastOrDefault();
+
+        if (fight == null)
+            return;
+
         var newSegment = fight.Segments.LastOrDefault();
+        var newSegmentStartTime = newSegment != null
+            ? DateTimeOffset.FromUnixTimeMilliseconds(newSegment.StartTime)
+            : DateTimeOffset.MinValue;
         
-        if (newSegment != null
-            && (segment == null
-                || segment.Encounter.Name != newSegment.Encounter.Name
-                || segmentStartTime == DateTimeOffset.MinValue))
-            segmentStartTime = DateTimeOffset.FromUnixTimeMilliseconds(newSegment.StartTime);
-        else if (newSegment == null || segmentStartTime == DateTimeOffset.MinValue)
-            segmentStartTime = DateTimeOffset.FromUnixTimeMilliseconds(fight.StartTime);
+        if ((newSegment != null
+             && (segment == null
+                 || newSegmentStartTime - segmentStartTime >= TimeSpan.FromSeconds(3)
+                 || segmentStartTime == DateTimeOffset.MinValue))
+            || newSegment == null
+            || segmentStartTime == DateTimeOffset.MinValue)
+            segmentStartTime = newSegmentStartTime;
 
         segment = newSegment;
     }

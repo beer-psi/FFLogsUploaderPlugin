@@ -50,7 +50,7 @@ public class FFLogsManager : IAsyncDisposable
     private Task? collectTask;
     internal bool IsMonitoringActive => monitorTask is { IsCompleted: false };
 
-    public event EventHandler<LogParser.MeterFight>? MetersCollected;
+    public event EventHandler<LogParser.CollectMetersResponseData>? MetersCollected;
     
     public FFLogsManager(Plugin plugin)
     {
@@ -333,12 +333,8 @@ public class FFLogsManager : IAsyncDisposable
                         break;
                     
                     var meters = await MetersLogParser.CollectMetersAsync();
-                    var fight = meters.Fights.LastOrDefault();
 
-                    if (fight == null)
-                        continue;
-
-                    OnMetersCollected(fight);
+                    OnMetersCollected(meters);
                 }
             }, monitorCts.Token)
             .ContinueWith(t =>
@@ -357,9 +353,9 @@ public class FFLogsManager : IAsyncDisposable
         monitorCts = null;
     }
     
-    protected virtual void OnMetersCollected(LogParser.MeterFight fight)
+    protected virtual void OnMetersCollected(LogParser.CollectMetersResponseData meters)
     {
-        MetersCollected?.Invoke(this, fight);
+        MetersCollected?.Invoke(this, meters);
     }
     
     internal Task<string> UploadLogFileAsync(
