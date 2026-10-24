@@ -15,7 +15,6 @@ public class DtrBarEntry : IDisposable
     private readonly IDtrBarEntry dtrBarEntry;
     private LogParser.MeterFight? fight;
     private LogParser.MeterFightSegment? segment;
-    private DateTimeOffset segmentStartTime = DateTimeOffset.MinValue;
     
     public DtrBarEntry(Plugin plugin)
     {
@@ -60,13 +59,12 @@ public class DtrBarEntry : IDisposable
         if (fight == null)
             return;
 
-        var newSegment = fight.Segments.LastOrDefault();
+        var newSegment = fight.Segments.MaxBy(s => (s.StartTime, s.Encounter.Id));
         var newSegmentStartTime = newSegment != null
             ? DateTimeOffset.FromUnixTimeMilliseconds(newSegment.StartTime)
             : DateTimeOffset.MinValue;
 
         segment = newSegment;
-        segmentStartTime = newSegmentStartTime;
     }
 
     private void OnFrameworkUpdate(IFramework framework)
@@ -90,7 +88,7 @@ public class DtrBarEntry : IDisposable
                       || Plugin.PartyList.Any(actor => actor.GameObject is ICharacter character &&
                                                        (character.StatusFlags & StatusFlags.InCombat) != 0);
         var isStateFinal = state != "inprogress";
-        var startTime = segmentStartTime;
+        var startTime = DateTimeOffset.FromUnixTimeMilliseconds(segment?.StartTime ?? fight.StartTime);
         var endTime = isInCombat || !isStateFinal
                           ? DateTimeOffset.UtcNow
                           : DateTimeOffset.FromUnixTimeMilliseconds(segment?.EndTime ?? fight.EndTime);
